@@ -1,0 +1,9 @@
+<resources>
+    <color name="ink">#17202A</color>
+    <color name="muted_ink">#65727E</color>
+    <color name="cream">#FFF8EF</color>
+    <color name="coral">#F26B5E</color>
+    <color name="coral_dark">#C94D43</color>
+    <color name="card">#FFFFFF</color>
+    <color name="line">#EBDDD1</color>
+</resources>

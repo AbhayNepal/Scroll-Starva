@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Scroll Starva</string>
+    <string name="accessibility_description">Tracks time and vertical scrolls in short-form feeds so you can understand your scrolling habits.</string>
+</resources>
