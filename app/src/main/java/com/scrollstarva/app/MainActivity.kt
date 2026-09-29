@@ -60,11 +60,14 @@ class MainActivity : android.app.Activity() {
         card.addView(label("estimated physical distance today"))
         content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
 
-        val metrics = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val metrics = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scrollCount = metric("0", 24f)
         timeCount = metric("0m", 24f)
         metrics.addView(metricBlock(scrollCount, "scrolls"))
-        metrics.addView(metricBlock(timeCount, "feed time"), LinearLayout.LayoutParams(0, -2, 1f))
+        metrics.addView(
+            metricBlock(timeCount, "feed time"),
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
+        )
         content.addView(metrics)
 
         content.addView(TextView(this).apply {
