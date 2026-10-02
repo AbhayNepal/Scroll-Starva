@@ -2,6 +2,10 @@
 
 Scroll Starva is an Android app that estimates how far a user has scrolled on short-form feeds (TikTok, YouTube Shorts, Instagram Reels, and Facebook Reels) and tracks time spent in those feeds.
 
+The dashboard separates a daily check-in, feed-time trends, scroll activity, and habit progress into tabs. Local charts show up to 15 days of activity, with supportive summaries that compare tracked weeks once enough history is available. The interface also includes an original animated progress buddy, tab-specific accent colors, animated page transitions, and tappable charts.
+
+The **Debug** tab shows recent accessibility events from supported apps, the event source and active-window labels, feed-detection decisions, scroll deltas, and whether each scroll was counted or ignored. The on-device log keeps up to 120 recent entries in memory; visible feed text can appear in the log. Use **Copy log** only when you intend to share those details.
+
 ## Setup
 
 Install or configure the following before building:
@@ -116,6 +120,34 @@ IntelliJ editions may not provide Android Studio's emulator/device run controls.
 adb shell am start -n com.scrollstarva.app/.MainActivity
 ```
 
+#### Debug the Android app from IntelliJ
+
+For a repeatable command-line setup, use [`scripts/android-debug.sh`](scripts/android-debug.sh). It builds and installs the debug app, configures Android to wait for a debugger, launches the app, and forwards its JDWP port. The app can appear frozen until IntelliJ attaches; that is expected.
+
+Prerequisites: JDK 17 and the Android SDK are configured as described above, `adb` is on `PATH`, USB debugging is enabled on the phone, and the phone is authorized (`adb devices` shows its status as `device`). In IntelliJ, open **Run > Edit Configurations…**, add a **Remote JVM Debug** configuration (or **Remote** configuration with debugger mode set to **Attach**), and set host to `localhost` and port to `8700`. Leave that configuration ready; start it after the script says the phone app is waiting.
+
+From the project root, run:
+
+```bash
+./scripts/android-debug.sh start
+```
+
+If exactly one authorized device is not connected, the script stops with instructions. When multiple devices are connected, select the phone explicitly:
+
+```bash
+ANDROID_SERIAL=13150314A3031291 ./scripts/android-debug.sh start
+```
+
+Replace the example serial with the ID shown by `adb devices`. When the script reports that the app is waiting, start the Remote JVM Debug configuration in IntelliJ. The app should then continue on the phone; reproduce the behavior to hit breakpoints.
+
+When finished, stop/detach the debugger in IntelliJ and clear Android's persistent wait-for-debugger setting and the port forwarding:
+
+```bash
+./scripts/android-debug.sh stop
+```
+
+If IntelliJ does not offer a Remote JVM Debug/Remote configuration, this setup is not available in that IntelliJ installation; use Android Studio's debugger instead. Android Studio can select the connected device directly and does not need this script.
+
 ### Android Studio or command line
 
 In Android Studio, open the project, select a connected device or emulator, and click **Run**. From a terminal, `./gradlew installDebug` installs the app on a connected device/emulator.
@@ -156,6 +188,8 @@ The app only reads visible accessibility labels from supported apps to recognize
 │   ├── src/main/java/com/scrollstarva/app/
 │   ├── src/main/res/
 │   └── build.gradle.kts
+├── scripts/
+│   └── android-debug.sh
 ├── build.gradle.kts
 ├── gradlew
 ├── gradlew.bat

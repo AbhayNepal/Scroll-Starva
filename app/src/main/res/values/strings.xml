@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">Scroll Starva</string>
-    <string name="accessibility_description">Tracks time and vertical scrolls in short-form feeds so you can understand your scrolling habits.</string>
+    <string name="accessibility_description">Tracks feed sessions and scrolls locally. Shows a 10-second pause after rapid re-entry and a break reminder after 20 minutes.</string>
 </resources>
