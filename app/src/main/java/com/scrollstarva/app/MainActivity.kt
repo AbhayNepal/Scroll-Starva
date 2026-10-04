@@ -20,6 +20,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -52,6 +53,9 @@ class MainActivity : android.app.Activity() {
     private lateinit var buddyView: FloatingBuddyView
     private lateinit var diagnosticLogView: TextView
     private lateinit var snapshot: TrackingSnapshot
+    private var focusMode = false
+    private lateinit var focusTimerView: TextView
+    private lateinit var focusStatusView: TextView
     private val diagnosticHandler = Handler(Looper.getMainLooper())
     private var selectedTab = DashboardTab.OVERVIEW
     private var buddyMessageIndex = 0
@@ -65,26 +69,57 @@ class MainActivity : android.app.Activity() {
             }
         }
     }
+    private val focusTimerRefresh = object : Runnable {
+        override fun run() {
+            if (!focusMode || !activityResumed) return
+            val focusSession = repository.activeFocusSession()
+            if (focusSession == null) {
+                leaveFocusMode()
+                return
+            }
+            focusTimerView.text = formatFocusCountdown(focusSession)
+            focusStatusView.text = if (focusSession.isPaused) {
+                "Focus paused during your short scroll break."
+            } else {
+                "One calm, intentional stretch. You’ve got this."
+            }
+            diagnosticHandler.postDelayed(this, FOCUS_TIMER_REFRESH_MILLIS)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = TrackingRepository(this)
         snapshot = repository.snapshot()
-        setContentView(buildScreen())
+        val focusSession = repository.activeFocusSession()
+        if (focusSession != null) {
+            showFocusScreen(focusSession)
+        } else {
+            setContentView(buildScreen())
+        }
     }
 
     override fun onResume() {
         super.onResume()
         activityResumed = true
         if (::repository.isInitialized) {
-            refresh()
-            startDiagnosticRefresh()
+            val focusSession = repository.activeFocusSession()
+            if (focusSession != null) {
+                if (!focusMode) showFocusScreen(focusSession)
+                else focusTimerRefresh.run()
+            } else if (focusMode) {
+                leaveFocusMode()
+            } else {
+                refresh()
+                startDiagnosticRefresh()
+            }
         }
     }
 
     override fun onPause() {
         activityResumed = false
         diagnosticHandler.removeCallbacks(diagnosticRefresh)
+        diagnosticHandler.removeCallbacks(focusTimerRefresh)
         super.onPause()
     }
 
@@ -176,6 +211,98 @@ class MainActivity : android.app.Activity() {
     private fun refresh() {
         snapshot = repository.snapshot()
         renderTab()
+    }
+
+    private fun showFocusScreen(focusSession: FocusSession) {
+        focusMode = true
+        diagnosticHandler.removeCallbacks(diagnosticRefresh)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+            setBackgroundColor(CREAM)
+        }
+        root.addView(TextView(this).apply {
+            text = "SCROLL STARVA"
+            textSize = 13f
+            letterSpacing = .18f
+            setTextColor(CORAL_DARK)
+            gravity = Gravity.CENTER
+        })
+        root.addView(TextView(this).apply {
+            text = "Your focus time"
+            textSize = 29f
+            setTextColor(INK)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(38), 0, dp(4))
+        })
+        root.addView(TextView(this).apply {
+            text = if (focusSession.isPaused) {
+                "Focus paused during your short scroll break."
+            } else {
+                "One calm, intentional stretch. You’ve got this."
+            }
+            textSize = 15f
+            setTextColor(MUTED)
+            gravity = Gravity.CENTER
+        }.also { focusStatusView = it })
+        focusTimerView = TextView(this).apply {
+            text = formatFocusCountdown(focusSession)
+            textSize = 68f
+            setTextColor(CORAL_DARK)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(36), 0, dp(28))
+        }
+        root.addView(focusTimerView)
+        root.addView(card {
+            addView(label("A NOTE TO CARRY WITH YOU", CORAL_DARK, 12f))
+            addView(TextView(this@MainActivity).apply {
+                text = "“${focusSession.quote}”"
+                textSize = 20f
+                setTextColor(INK)
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, dp(10), 0, dp(4))
+            })
+        })
+        root.addView(actionButton("End focus early") { leaveFocusMode() }.apply {
+            setTextColor(CORAL_DARK)
+            background = roundedBackground(Color.WHITE, dp(12).toFloat())
+        }, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(24)
+        })
+        setContentView(root)
+        if (activityResumed) {
+            diagnosticHandler.removeCallbacks(focusTimerRefresh)
+            diagnosticHandler.post(focusTimerRefresh)
+        }
+    }
+
+    private fun leaveFocusMode() {
+        diagnosticHandler.removeCallbacks(focusTimerRefresh)
+        repository.endFocusSession()
+        focusMode = false
+        snapshot = repository.snapshot()
+        setContentView(buildScreen())
+        refresh()
+    }
+
+    private fun formatFocusCountdown(focusSession: FocusSession): String {
+        val remainingMillis = if (focusSession.isPaused) {
+            focusSession.pausedRemainingMillis
+        } else {
+            (focusSession.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+        }
+        val remainingSeconds = (remainingMillis + 999L) / 1_000L
+        val hours = remainingSeconds / 3_600L
+        val minutes = (remainingSeconds % 3_600L) / 60L
+        val seconds = remainingSeconds % 60L
+        return if (hours > 0) {
+            String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.US, "%02d:%02d", minutes, seconds)
+        }
     }
 
     private fun renderTab() {
@@ -332,6 +459,29 @@ class MainActivity : android.app.Activity() {
 
     private fun buildProgressTab() {
         val history = snapshot.dailyHistory
+        pageContent.addView(sectionTitle("Timers & focus"))
+        pageContent.addView(timerSettingsCard())
+        pageContent.addView(card {
+            addView(label("A FOCUSED PAUSE", CORAL_DARK, 12f))
+            addView(TextView(this@MainActivity).apply {
+                text = "Choose a focus duration, then step away from the feed and give your attention to one thing that matters."
+                textSize = 15f
+                setTextColor(INK)
+                setPadding(0, dp(8), 0, dp(4))
+            })
+            val durationPicker = FocusDurationPicker(
+                this@MainActivity,
+                TrackingTimerSettings.FOCUS_SESSION_MILLIS
+            )
+            addView(durationPicker)
+            addView(actionButton("Start focus") {
+                repository.startFocusSession(
+                    durationPicker.durationMillis,
+                    FocusSessionQuotes.random()
+                )
+                showFocusScreen(checkNotNull(repository.activeFocusSession()))
+            })
+        })
         pageContent.addView(card {
             addView(label("TODAY'S HABIT TAPER INDEX", CORAL_DARK, 12f))
             val score = history.lastOrNull()?.htiScore?.let { "${it.toInt()} / 100" } ?: "— / 100"
@@ -364,6 +514,37 @@ class MainActivity : android.app.Activity() {
                 setPadding(0, dp(8), 0, 0)
             })
         })
+    }
+
+    private fun timerSettingsCard(): View = card {
+        var marathonMinutes = repository.marathonMinutes()
+        val marathonLabel = label("Break reminder: $marathonMinutes minutes", INK, 15f)
+        addView(marathonLabel)
+        addView(SeekBar(this@MainActivity).apply {
+            max = TrackingTimerSettings.MAX_MARATHON_MINUTES -
+                TrackingTimerSettings.MIN_MARATHON_MINUTES
+            progress = marathonMinutes - TrackingTimerSettings.MIN_MARATHON_MINUTES
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    marathonMinutes = progress + TrackingTimerSettings.MIN_MARATHON_MINUTES
+                    marathonLabel.text = "Break reminder: $marathonMinutes minutes"
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    repository.setMarathonMinutes(marathonMinutes)
+                    refresh()
+                }
+            })
+        })
+        addView(label(
+            "${TrackingTimerSettings.MIN_MARATHON_MINUTES}–" +
+                "${TrackingTimerSettings.MAX_MARATHON_MINUTES} minutes in tracked feeds",
+            MUTED,
+            12f
+        ))
+
     }
 
     private fun buildDebugTab() {
@@ -958,6 +1139,7 @@ class MainActivity : android.app.Activity() {
 
     private companion object {
         const val DIAGNOSTIC_REFRESH_MILLIS = 750L
+        const val FOCUS_TIMER_REFRESH_MILLIS = 1_000L
         val CREAM = Color.parseColor("#FFF8EF")
         val INK = Color.parseColor("#17202A")
         val MUTED = Color.parseColor("#65727E")

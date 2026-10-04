@@ -2,11 +2,13 @@ package com.scrollstarva.app
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.content.Intent
 import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -26,16 +28,23 @@ class ScrollAccessibilityService : AccessibilityService() {
     private var trackingPackage: String? = null
     private var trackingPlatform: FeedPlatform? = null
     private var trackingActivityId: String? = null
+    private var lastWindowStatePackage: String? = null
     private var trackingStartedAtElapsed = 0L
     private var trackingStartedAtWall = 0L
     private var feedStartedAtElapsed = 0L
     private var lastCheckpointElapsed = 0L
     private var sessionScrollCount = 0
     private var lastScrollAt = 0L
+    private var lastLegacyScrollPosition: LegacyScrollPosition? = null
     private var marathonReminderShown = false
     private var interventionView: android.view.View? = null
-    private var countdownRunnable: Runnable? = null
     private val delayedStop = Runnable { stopTracking() }
+    private val focusReminderRunnable = Runnable {
+        if (repository.isFocusReminderDue()) {
+            repository.markFocusReminderShown()
+            showFocusInterruptionPrompt()
+        }
+    }
 
     private val flushTimer = object : Runnable {
         override fun run() {
@@ -44,56 +53,81 @@ class ScrollAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun scheduleFocusReminder() {
+        handler.removeCallbacks(focusReminderRunnable)
+        val focusSession = repository.activeFocusSession() ?: return
+        if (!focusSession.isPaused) return
+        if (focusSession.reminderAtMillis == 0L) {
+            showFocusInterruptionPrompt()
+            return
+        }
+        handler.postDelayed(
+            focusReminderRunnable,
+            (focusSession.reminderAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+        )
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         repository.finishInterruptedSessions()
         AccessibilityDiagnostics.record("Accessibility service connected and tracking enabled")
+        scheduleFocusReminder()
         handler.postDelayed(flushTimer, CHECKPOINT_INTERVAL_MILLIS)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val packageName = event.packageName?.toString()
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            if (packageName == this.packageName || packageName?.let(FeedDetector::platformFor) == null) {
+                lastWindowStatePackage = null
+                if (trackingPackage != null) scheduleStopTracking()
+                return
+            }
+            if (lastWindowStatePackage == packageName) return
+            lastWindowStatePackage = packageName
+        }
+
         if (packageName == this.packageName) return
 
         val platform = packageName?.let(FeedDetector::platformFor)
         if (platform == null) {
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-                scheduleStopTracking()
-            }
             return
         }
 
-        val sourceLabels = FeedDetector.visibleLabels(event.source)
-        val windowLabels = FeedDetector.visibleLabels(rootInActiveWindow)
+        val focusSession = repository.activeFocusSession()
+        if (focusSession != null) {
+            if (!focusSession.isPaused || focusSession.reminderAtMillis == 0L) {
+                if (trackingPackage != null) stopTracking()
+                showFocusInterruptionPrompt()
+                return
+            }
+        }
+
+        val continuingTrackedFeed = event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED &&
+            trackingPackage == platform.packageName
+        val sourceLabels = if (continuingTrackedFeed) "" else FeedDetector.visibleLabels(event.source)
+        val windowLabels = if (continuingTrackedFeed) "" else FeedDetector.visibleLabels(rootInActiveWindow)
         val visibleLabels = listOf(sourceLabels, windowLabels)
             .filter(String::isNotBlank)
             .distinct()
             .joinToString(" | ")
             .take(MAX_COMBINED_LABEL_LENGTH)
-        val feedVisible = when (event.eventType) {
-            AccessibilityEvent.TYPE_VIEW_SCROLLED,
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ->
-                FeedDetector.isShortFormFeed(visibleLabels, platform)
-            else -> false
+        val feedVisible = continuingTrackedFeed ||
+            (event.eventType in FEED_DETECTION_EVENT_TYPES &&
+                FeedDetector.isShortFormFeed(visibleLabels, platform))
+        val feedMatch = if (continuingTrackedFeed) null else FeedDetector.feedMatch(visibleLabels, platform)
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            AccessibilityDiagnostics.record(
+                "Package: $packageName\n" +
+                    "Event: ${eventTypeName(event.eventType)} (${event.eventType})\n" +
+                    "Platform: ${platform.label}\n" +
+                    "Feed visible: $feedVisible\n" +
+                    "Matching feed label: ${feedMatch ?: "none"}\n" +
+                    "Visible labels: ${visibleLabels.ifBlank { "(none exposed by this event)" }}"
+            )
         }
-        val feedMatch = FeedDetector.feedMatch(visibleLabels, platform)
-        AccessibilityDiagnostics.record(
-            "Package: $packageName\n" +
-                "Event: ${eventTypeName(event.eventType)} (${event.eventType})\n" +
-                "Source class: ${event.className ?: "(unknown)"}\n" +
-                "Platform: ${platform.label}\n" +
-                "Feed detection evaluated: ${event.eventType in FEED_DETECTION_EVENT_TYPES}\n" +
-                "Feed visible: $feedVisible\n" +
-                "Matching feed label: ${feedMatch ?: "none"}\n" +
-                "Scroll delta: ${scrollDeltaDescription(event)}\n" +
-                "Event source labels: ${sourceLabels.ifBlank { "(none)" }}\n" +
-                "Active window labels: ${windowLabels.ifBlank { "(none)" }}\n" +
-                "Visible labels: ${visibleLabels.ifBlank { "(none exposed by this event)" }}"
-        )
 
-        if (!feedVisible) {
+        if (!feedVisible && !continuingTrackedFeed) {
             if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 AccessibilityDiagnostics.record("Decision: schedule tracking stop in ${FEED_EXIT_GRACE_MILLIS}ms (feed not detected)")
                 scheduleStopTracking()
@@ -116,20 +150,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                         "Delta: ${scrollDeltaDescription(event)}\n" +
                         "Debounce: passed (> ${SCROLL_DEBOUNCE_MILLIS}ms)"
                 )
-            } else {
-                AccessibilityDiagnostics.record(
-                    "Scroll decision: IGNORED by debounce\n" +
-                        "Package: $packageName\n" +
-                        "Delta: ${scrollDeltaDescription(event)}\n" +
-                        "Elapsed since previous count: ${now - lastScrollAt}ms; threshold: ${SCROLL_DEBOUNCE_MILLIS}ms"
-                )
             }
-        } else if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-            AccessibilityDiagnostics.record(
-                "Scroll decision: IGNORED as non-vertical\n" +
-                    "Package: $packageName\n" +
-                    "Delta: ${scrollDeltaDescription(event)}"
-            )
         }
     }
 
@@ -158,13 +179,14 @@ class ScrollAccessibilityService : AccessibilityService() {
         lastCheckpointElapsed = trackingStartedAtElapsed
         sessionScrollCount = 0
         lastScrollAt = 0L
+        lastLegacyScrollPosition = null
         marathonReminderShown = false
 
         AccessibilityDiagnostics.record(
             "Session started\nApp: ${platform.label}\n" +
                 "Rapid re-entry for this app: ${session.isRapidReentry}"
         )
-        if (session.isRapidReentry) showPauseOverlay()
+//        if (session.isRapidReentry) showPauseOverlay()
     }
 
     private fun stopTracking() {
@@ -194,7 +216,6 @@ class ScrollAccessibilityService : AccessibilityService() {
         lastCheckpointElapsed = 0L
         sessionScrollCount = 0
         marathonReminderShown = false
-        removeIntervention()
     }
 
     private fun scheduleStopTracking() {
@@ -230,7 +251,8 @@ class ScrollAccessibilityService : AccessibilityService() {
         )
         lastCheckpointElapsed = nowElapsed
 
-        if (nowElapsed - feedStartedAtElapsed >= MARATHON_MILLIS && !marathonReminderShown) {
+        val marathonMillis = repository.marathonMinutes() * 60_000L
+        if (nowElapsed - feedStartedAtElapsed >= marathonMillis && !marathonReminderShown) {
             marathonReminderShown = true
             showMarathonReminder()
         }
@@ -269,98 +291,183 @@ class ScrollAccessibilityService : AccessibilityService() {
             elapsedSinceMidnight,
             sessionScrollCount
         )
-        if (newSession.isRapidReentry) showPauseOverlay()
-        if (nowElapsed - feedStartedAtElapsed >= MARATHON_MILLIS && !marathonReminderShown) {
+//        if (newSession.isRapidReentry) showPauseOverlay()
+        val marathonMillis = repository.marathonMinutes() * 60_000L
+        if (nowElapsed - feedStartedAtElapsed >= marathonMillis && !marathonReminderShown) {
             marathonReminderShown = true
             showMarathonReminder()
         }
     }
 
-    private fun showPauseOverlay() {
-        showIntervention(
-            title = "Pause before reopening",
-            message = "Take one slow breath. This app was opened again within five minutes.",
-            countdownSeconds = COOLING_PAUSE_SECONDS
-        )
-    }
-
     private fun showMarathonReminder() {
-        showIntervention(
-            title = "Time for a short break?",
-            message = "You have been in this feed for 20 minutes. Look away, stretch, or take a short walk.",
-            countdownSeconds = 0
+        showBreakPrompt(maxOf(0L, SystemClock.elapsedRealtime() - feedStartedAtElapsed))
+    }
+
+    private fun showFocusInterruptionPrompt() {
+        if (interventionView != null) return
+        val focusSession = repository.activeFocusSession() ?: return
+        val remainingMillis = if (focusSession.isPaused) {
+            focusSession.pausedRemainingMillis
+        } else {
+            (focusSession.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+        }
+        if (remainingMillis <= 0L) {
+            repository.endFocusSession()
+            return
+        }
+        var selectedBreakMinutes = repository.focusBreakMinutes()
+        showPromptCard(
+            title = "Your focus time isn’t finished",
+            message = "You still have ${formatMinutes(remainingMillis)} of focus time. Choose what feels right.",
+            quote = focusSession.quote,
+            extraContent = { prompt ->
+                val maxBreak = TrackingTimerSettings.maxFocusBreakMinutes(repository.marathonMinutes())
+                val breakPicker = HorizontalWheelPicker(
+                    this,
+                    label = "Scroll break (minutes)",
+                    minValue = TrackingTimerSettings.MIN_FOCUS_BREAK_MINUTES,
+                    maxValue = maxBreak,
+                    initialValue = selectedBreakMinutes,
+                    swipeDpPerStep = 20f
+                )
+                breakPicker.onValueChanged = { selectedBreakMinutes = it }
+                prompt.addView(breakPicker)
+            },
+            actions = listOf(
+                "End focus early" to {
+                    handler.removeCallbacks(focusReminderRunnable)
+                    repository.endFocusSession()
+                    removeIntervention()
+                },
+                "Take this scroll break" to {
+                    repository.setFocusBreakMinutes(selectedBreakMinutes)
+                    if (repository.pauseFocusForScrollBreak(selectedBreakMinutes * 60_000L) != null) {
+                        scheduleFocusReminder()
+                    }
+                    removeIntervention()
+                },
+                "Resume focus" to {
+                    handler.removeCallbacks(focusReminderRunnable)
+                    repository.resumeFocusSession()
+                    removeIntervention()
+                    returnToFocusScreen()
+                }
+            )
         )
     }
 
-    private fun showIntervention(title: String, message: String, countdownSeconds: Int) {
+    private fun showBreakPrompt(elapsedMillis: Long) {
+        val minutes = elapsedMillis / 60_000L
+        val durationPicker = FocusDurationPicker(this, TrackingTimerSettings.FOCUS_SESSION_MILLIS)
+        showPromptCard(
+            title = "A gentle pause",
+            message = "You’ve been scrolling for $minutes minutes. A short break can help you return with a clearer mind.",
+            quote = FocusSessionQuotes.random(),
+            extraContent = { prompt ->
+                prompt.addView(TextView(this).apply {
+                    text = "Focus duration (up to 8 hours)"
+                    textSize = 14f
+                    setTextColor(Color.parseColor("#65727E"))
+                    setPadding(0, dp(4), 0, 0)
+                })
+                prompt.addView(durationPicker)
+            },
+            actions = listOf(
+                "Start focus" to { startFocusSession(durationPicker.durationMillis) },
+                "Maybe later" to { removeIntervention() }
+            )
+        )
+    }
+
+    private fun showPromptCard(
+        title: String,
+        message: String,
+        quote: String,
+        extraContent: ((LinearLayout) -> Unit)?,
+        actions: List<Pair<String, () -> Unit>>
+    ) {
         removeIntervention()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(32), dp(32), dp(32), dp(32))
-            setBackgroundColor(Color.argb(238, 23, 32, 42))
+            setPadding(dp(20), dp(18), dp(20), dp(16))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#FFF8EF"))
+                cornerRadius = dp(22).toFloat()
+                setStroke(dp(1), Color.parseColor("#F1D8C5"))
+            }
+            elevation = dp(12).toFloat()
         }
         root.addView(TextView(this).apply {
             text = title
-            textSize = 25f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
+            textSize = 20f
+            setTextColor(Color.parseColor("#17202A"))
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
             text = message
-            textSize = 17f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            setPadding(0, dp(18), 0, dp(20))
+            textSize = 15f
+            setTextColor(Color.parseColor("#65727E"))
+            setPadding(0, dp(8), 0, dp(6))
         })
-
-        val countdown = TextView(this).apply {
-            textSize = 20f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-        }
-        root.addView(countdown)
-        if (countdownSeconds == 0) {
+        root.addView(TextView(this).apply {
+            text = "“$quote”"
+            textSize = 14f
+            setTextColor(Color.parseColor("#C94D43"))
+            setPadding(0, dp(2), 0, dp(12))
+        })
+        extraContent?.invoke(root)
+        actions.forEachIndexed { index, (actionText, action) ->
             root.addView(Button(this).apply {
-                text = "Close reminder"
-                setOnClickListener { removeIntervention() }
+                text = actionText
+                isAllCaps = false
+                if (index == 0) {
+                    setTextColor(Color.WHITE)
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor("#F26B5E"))
+                        cornerRadius = dp(12).toFloat()
+                    }
+                }
+                setOnClickListener { action() }
             })
         }
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            val margin = dp(16)
+            x = margin
+            y = dp(24)
         }
         windowManager.addView(root, params)
         interventionView = root
+    }
 
-        if (countdownSeconds > 0) {
-            var remaining = countdownSeconds
-            val runnable = object : Runnable {
-                override fun run() {
-                    if (remaining > 0) {
-                        countdown.text = "Continuing in $remaining seconds"
-                        remaining--
-                        handler.postDelayed(this, 1_000)
-                    } else {
-                        removeIntervention()
-                    }
-                }
-            }
-            countdownRunnable = runnable
-            runnable.run()
-        }
+    private fun startFocusSession(durationMillis: Long) {
+        repository.startFocusSession(
+            durationMillis,
+            FocusSessionQuotes.random()
+        )
+        if (trackingPackage != null) stopTracking()
+        removeIntervention()
+        returnToFocusScreen()
+    }
+
+    private fun returnToFocusScreen() {
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        )
     }
 
     private fun removeIntervention() {
-        countdownRunnable?.let(handler::removeCallbacks)
-        countdownRunnable = null
         interventionView?.let { view ->
             windowManager.removeView(view)
             interventionView = null
@@ -369,27 +476,59 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private fun isVerticalScroll(event: AccessibilityEvent): Boolean =
+    private fun formatMinutes(millis: Long): String {
+        val minutes = (millis + 59_999L) / 60_000L
+        return "$minutes ${if (minutes == 1L) "minute" else "minutes"}"
+    }
+
+    private fun isVerticalScroll(event: AccessibilityEvent): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            event.scrollDeltaY != 0 || event.scrollDeltaX == 0
-        } else {
-            event.fromIndex != event.toIndex || event.scrollX == 0
+            return event.scrollDeltaY != 0
         }
+
+        val current = LegacyScrollPosition(
+            packageName = event.packageName?.toString(),
+            className = event.className?.toString(),
+            fromIndex = event.fromIndex,
+            toIndex = event.toIndex,
+            scrollX = event.scrollX,
+            scrollY = event.scrollY
+        )
+        val previous = lastLegacyScrollPosition
+        lastLegacyScrollPosition = current
+        if (previous == null ||
+            current.packageName != previous.packageName ||
+            current.className != previous.className
+        ) {
+            return false
+        }
+
+        val horizontalMoved = current.scrollX != previous.scrollX
+        val verticalMoved = current.scrollY != previous.scrollY ||
+            current.fromIndex != previous.fromIndex ||
+            current.toIndex != previous.toIndex
+        return verticalMoved && !horizontalMoved
+    }
 
     private companion object {
         val FEED_DETECTION_EVENT_TYPES = setOf(
             AccessibilityEvent.TYPE_VIEW_SCROLLED,
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         )
         const val CHECKPOINT_INTERVAL_MILLIS = 10_000L
-        const val SCROLL_DEBOUNCE_MILLIS = 250L
-        const val MARATHON_MILLIS = 20 * 60 * 1000L
-        const val COOLING_PAUSE_SECONDS = 10
+        const val SCROLL_DEBOUNCE_MILLIS = 750L
         const val FEED_EXIT_GRACE_MILLIS = 2_500L
         const val MAX_COMBINED_LABEL_LENGTH = 1_800
     }
+
+    private data class LegacyScrollPosition(
+        val packageName: String?,
+        val className: String?,
+        val fromIndex: Int,
+        val toIndex: Int,
+        val scrollX: Int,
+        val scrollY: Int
+    )
 }
 
 enum class FeedPlatform(val packageName: String, val label: String) {
@@ -400,9 +539,14 @@ enum class FeedPlatform(val packageName: String, val label: String) {
 }
 
 object FeedDetector {
-    private val feedTerms = setOf(
-        "shorts", "shorts player", "reels", "reel", "tiktok",
-        "for you", "fyp", "videos", "video player"
+    private val youtubeShortsPlayerTerms = setOf(
+        "shorts player",
+        "remix this short",
+        "see more videos using this sound"
+    )
+    private val instagramReelsViewerTerms = setOf(
+        "reel by",
+        "reels viewer"
     )
 
     fun platformFor(packageName: String): FeedPlatform? =
@@ -417,25 +561,25 @@ object FeedDetector {
         val normalized = visibleLabels.lowercase()
         return when (platform) {
             FeedPlatform.TIKTOK -> normalized.contains("for you") ||
-                normalized.contains("following") || normalized.contains("tiktok")
-            FeedPlatform.YOUTUBE -> normalized.contains("shorts") ||
-                normalized.contains("shorts player")
-            FeedPlatform.INSTAGRAM -> normalized.contains("reels") ||
-                normalized.contains("reel")
+                normalized.contains("following") || normalized.contains("tiktok") ||
+                normalized.contains("fyp")
+            FeedPlatform.YOUTUBE -> normalized.contains("shorts") &&
+                youtubeShortsPlayerTerms.any(normalized::contains)
+            FeedPlatform.INSTAGRAM -> instagramReelsViewerTerms.any(normalized::contains)
             FeedPlatform.FACEBOOK -> normalized.contains("reels") ||
                 normalized.contains("video player")
-        } || feedTerms.any(normalized::contains)
+        }
     }
 
     fun feedMatch(visibleLabels: String, platform: FeedPlatform): String? {
         val normalized = visibleLabels.lowercase()
         val platformTerms = when (platform) {
-            FeedPlatform.TIKTOK -> listOf("for you", "following", "tiktok")
-            FeedPlatform.YOUTUBE -> listOf("shorts player", "shorts")
-            FeedPlatform.INSTAGRAM -> listOf("reels", "reel")
+            FeedPlatform.TIKTOK -> listOf("for you", "following", "tiktok", "fyp")
+            FeedPlatform.YOUTUBE -> youtubeShortsPlayerTerms.toList()
+            FeedPlatform.INSTAGRAM -> instagramReelsViewerTerms.toList()
             FeedPlatform.FACEBOOK -> listOf("reels", "video player")
         }
-        return (platformTerms + feedTerms).firstOrNull(normalized::contains)
+        return platformTerms.firstOrNull(normalized::contains)
     }
 
     fun visibleLabels(root: AccessibilityNodeInfo?): String {
