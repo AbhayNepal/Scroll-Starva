@@ -23,7 +23,8 @@ class HorizontalWheelPicker(
     minValue: Int,
     maxValue: Int,
     initialValue: Int,
-    private val swipeDpPerStep: Float
+    private val swipeDpPerStep: Float,
+    private val formatValue: (Int) -> String = { String.format("%02d", it) }
 ) : LinearLayout(context) {
     private val wheel: WheelView
     var onValueChanged: ((Int) -> Unit)? = null
@@ -41,7 +42,7 @@ class HorizontalWheelPicker(
             gravity = Gravity.CENTER
         }
         addView(heading, LayoutParams(-1, dp(24)))
-        wheel = WheelView(context, label, minValue, maxValue, initialValue)
+        wheel = WheelView(context, label, minValue, maxValue, initialValue, formatValue)
         wheel.valueChanged = { value -> onValueChanged?.invoke(value) }
         addView(wheel, LayoutParams(-1, dp(82)))
     }
@@ -55,7 +56,8 @@ class HorizontalWheelPicker(
         private val label: String,
         minValue: Int,
         maxValue: Int,
-        initialValue: Int
+        initialValue: Int,
+        private val formatValue: (Int) -> String
     ) : View(context) {
         private val density = resources.displayMetrics.density
         private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -132,7 +134,7 @@ class HorizontalWheelPicker(
                 textPaint.color = if (distance < .45f) selectedColor else secondaryColor
                 textPaint.alpha = (255 - distance.toInt() * 68).coerceAtLeast(65)
                 canvas.drawText(
-                    String.format("%02d", value),
+                    formatValue(value),
                     x,
                     centerY - (textPaint.ascent() + textPaint.descent()) / 2f,
                     textPaint
@@ -207,7 +209,7 @@ class HorizontalWheelPicker(
         override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
             super.onInitializeAccessibilityNodeInfo(info)
             info.className = "android.widget.SeekBar"
-            info.text = "$label: $selectedValue"
+            info.text = description()
             info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
             info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
         }
@@ -235,7 +237,7 @@ class HorizontalWheelPicker(
             sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_SELECTED)
         }
 
-        private fun description() = "$label: $selectedValue"
+        private fun description() = "$label: ${formatValue(selectedValue)}"
 
         private fun settleWheel() {
             settlingAnimator?.cancel()

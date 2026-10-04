@@ -41,6 +41,12 @@ object TrackingTimerSettings {
     const val FOCUS_SESSION_MILLIS = 25 * 60 * 1000L
     const val MAX_FOCUS_SESSION_HOURS = 8
     const val MAX_FOCUS_SESSION_MINUTES = MAX_FOCUS_SESSION_HOURS * 60
+    val BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS = listOf(
+        15L * 60_000L,
+        30L * 60_000L,
+        60L * 60_000L,
+        120L * 60_000L
+    )
 
     fun maxFocusBreakMinutes(marathonMinutes: Int): Int =
         minOf(MAX_FOCUS_BREAK_MINUTES, marathonMinutes - 1)
@@ -139,6 +145,18 @@ class TrackingRepository(context: Context) {
             .putInt(KEY_FOCUS_BREAK_MINUTES, focusBreakMinutes().coerceAtMost(maxBreak))
             .apply()
     }
+
+    fun muteBreakReminders(durationMillis: Long) {
+        require(durationMillis in TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS) {
+            "Break reminder snooze duration must be one of the supported options"
+        }
+        preferences.edit()
+            .putLong(KEY_BREAK_REMINDERS_MUTED_UNTIL, System.currentTimeMillis() + durationMillis)
+            .apply()
+    }
+
+    fun areBreakRemindersMuted(nowMillis: Long = System.currentTimeMillis()): Boolean =
+        preferences.getLong(KEY_BREAK_REMINDERS_MUTED_UNTIL, 0L) > nowMillis
 
     fun focusBreakMinutes(): Int {
         val maxBreak = TrackingTimerSettings.maxFocusBreakMinutes(marathonMinutes())
@@ -279,6 +297,7 @@ class TrackingRepository(context: Context) {
         const val KEY_FOCUS_REMINDER_AT = "focus_reminder_at"
         const val KEY_MARATHON_MINUTES = "marathon_minutes"
         const val KEY_FOCUS_BREAK_MINUTES = "focus_break_minutes"
+        const val KEY_BREAK_REMINDERS_MUTED_UNTIL = "break_reminders_muted_until"
     }
 }
 

@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.NumberPicker
 import android.widget.TextView
 import java.time.LocalDate
 import java.time.ZoneId
@@ -251,11 +252,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         )
         lastCheckpointElapsed = nowElapsed
 
-        val marathonMillis = repository.marathonMinutes() * 60_000L
-        if (nowElapsed - feedStartedAtElapsed >= marathonMillis && !marathonReminderShown) {
-            marathonReminderShown = true
-            showMarathonReminder()
-        }
+        maybeShowMarathonReminder(nowElapsed)
 
         if (LocalDate.now() != LocalDate.ofInstant(
                 java.time.Instant.ofEpochMilli(trackingStartedAtWall),
@@ -292,11 +289,19 @@ class ScrollAccessibilityService : AccessibilityService() {
             sessionScrollCount
         )
 //        if (newSession.isRapidReentry) showPauseOverlay()
+        maybeShowMarathonReminder(nowElapsed)
+    }
+
+    private fun maybeShowMarathonReminder(nowElapsed: Long) {
         val marathonMillis = repository.marathonMinutes() * 60_000L
-        if (nowElapsed - feedStartedAtElapsed >= marathonMillis && !marathonReminderShown) {
-            marathonReminderShown = true
-            showMarathonReminder()
+        if (nowElapsed - feedStartedAtElapsed < marathonMillis ||
+            marathonReminderShown ||
+            repository.areBreakRemindersMuted()
+        ) {
+            return
         }
+        marathonReminderShown = true
+        showMarathonReminder()
     }
 
     private fun showMarathonReminder() {
@@ -359,6 +364,8 @@ class ScrollAccessibilityService : AccessibilityService() {
     private fun showBreakPrompt(elapsedMillis: Long) {
         val minutes = elapsedMillis / 60_000L
         val durationPicker = FocusDurationPicker(this, TrackingTimerSettings.FOCUS_SESSION_MILLIS)
+        val snoozeOptions = TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS
+        var selectedSnoozeIndex = 0
         showPromptCard(
             title = "A gentle pause",
             message = "You’ve been scrolling for $minutes minutes. A short break can help you return with a clearer mind.",
@@ -371,13 +378,51 @@ class ScrollAccessibilityService : AccessibilityService() {
                     setPadding(0, dp(4), 0, 0)
                 })
                 prompt.addView(durationPicker)
+                val snoozeLabel = TextView(this).apply {
+                    text = snoozeDescription(snoozeOptions[selectedSnoozeIndex])
+                    textSize = 14f
+                    setTextColor(Color.parseColor("#65727E"))
+                    setPadding(0, dp(4), 0, 0)
+                }
+                prompt.addView(snoozeLabel)
+                prompt.addView(NumberPicker(this).apply {
+                    minValue = snoozeOptions.indices.first
+                    maxValue = snoozeOptions.indices.last
+                    displayedValues = snoozeOptions.map(::snoozeWheelLabel).toTypedArray()
+                    value = selectedSnoozeIndex
+                    wrapSelectorWheel = false
+                    descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
+                    contentDescription = "Mute break reminders duration"
+                    setOnValueChangedListener { _, _, index ->
+                        selectedSnoozeIndex = index
+                        snoozeLabel.text = snoozeDescription(snoozeOptions[index])
+                    }
+                }, LinearLayout.LayoutParams(-1, dp(96)))
             },
             actions = listOf(
                 "Start focus" to { startFocusSession(durationPicker.durationMillis) },
+                "Mute break reminders" to {
+                    repository.muteBreakReminders(
+                        TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS[selectedSnoozeIndex]
+                    )
+                    marathonReminderShown = false
+                    removeIntervention()
+                },
                 "Maybe later" to { removeIntervention() }
             )
         )
     }
+
+    private fun snoozeDescription(durationMillis: Long): String =
+        "Don’t bother me for the next ${snoozeWheelLabel(durationMillis)}."
+
+    private fun snoozeWheelLabel(durationMillis: Long): String =
+        if (durationMillis < 60 * 60_000L) {
+            "${durationMillis / 60_000L} min"
+        } else {
+            "${durationMillis / (60 * 60_000L)} hour${if (durationMillis >= 2 * 60 * 60_000L) "s" else ""}"
+        }
+
 
     private fun showPromptCard(
         title: String,
