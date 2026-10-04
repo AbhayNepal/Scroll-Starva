@@ -38,6 +38,7 @@ class ScrollAccessibilityService : AccessibilityService() {
     private var lastScrollAt = 0L
     private var lastLegacyScrollPosition: LegacyScrollPosition? = null
     private var marathonReminderShown = false
+    private var nextMarathonReminderAtElapsed = 0L
     private var interventionView: android.view.View? = null
     private val delayedStop = Runnable { stopTracking() }
     private val focusReminderRunnable = Runnable {
@@ -182,6 +183,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         lastScrollAt = 0L
         lastLegacyScrollPosition = null
         marathonReminderShown = false
+        nextMarathonReminderAtElapsed = 0L
 
         AccessibilityDiagnostics.record(
             "Session started\nApp: ${platform.label}\n" +
@@ -217,6 +219,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         lastCheckpointElapsed = 0L
         sessionScrollCount = 0
         marathonReminderShown = false
+        nextMarathonReminderAtElapsed = 0L
     }
 
     private fun scheduleStopTracking() {
@@ -293,14 +296,19 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun maybeShowMarathonReminder(nowElapsed: Long) {
-        val marathonMillis = repository.marathonMinutes() * 60_000L
-        if (nowElapsed - feedStartedAtElapsed < marathonMillis ||
-            marathonReminderShown ||
-            repository.areBreakRemindersMuted()
-        ) {
+        if (marathonReminderShown || repository.areBreakRemindersMuted()) {
             return
         }
+        val reminderIntervalMillis = repository.marathonMinutes() * 60_000L
+        val nextReminderAt = if (nextMarathonReminderAtElapsed > 0L) {
+            nextMarathonReminderAtElapsed
+        } else {
+            feedStartedAtElapsed + reminderIntervalMillis
+        }
+        if (nowElapsed < nextReminderAt) return
+
         marathonReminderShown = true
+        nextMarathonReminderAtElapsed = 0L
         showMarathonReminder()
     }
 
@@ -363,7 +371,10 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     private fun showBreakPrompt(elapsedMillis: Long) {
         val minutes = elapsedMillis / 60_000L
-        val durationPicker = FocusDurationPicker(this, TrackingTimerSettings.FOCUS_SESSION_MILLIS)
+        val durationPicker = FocusDurationPicker(
+            this,
+            repository.defaultFocusMinutes() * 60_000L
+        )
         val snoozeOptions = TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS
         var selectedSnoozeIndex = 0
         showPromptCard(
@@ -401,6 +412,12 @@ class ScrollAccessibilityService : AccessibilityService() {
             },
             actions = listOf(
                 "Start focus" to { startFocusSession(durationPicker.durationMillis) },
+                "Remind me again in ${repository.marathonMinutes()} minutes" to {
+                    nextMarathonReminderAtElapsed =
+                        SystemClock.elapsedRealtime() + repository.marathonMinutes() * 60_000L
+                    marathonReminderShown = false
+                    removeIntervention()
+                },
                 "Mute break reminders" to {
                     repository.muteBreakReminders(
                         TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS[selectedSnoozeIndex]

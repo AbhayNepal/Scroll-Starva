@@ -146,6 +146,25 @@ class TrackingRepository(context: Context) {
             .apply()
     }
 
+    fun defaultFocusMinutes(): Int = preferences.getInt(
+        KEY_DEFAULT_FOCUS_MINUTES,
+        TrackingTimerSettings.FOCUS_SESSION_MILLIS.toInt() / 60_000
+    ).coerceIn(1, TrackingTimerSettings.MAX_FOCUS_SESSION_MINUTES)
+
+    fun setDefaultFocusMinutes(minutes: Int) {
+        require(minutes in 1..TrackingTimerSettings.MAX_FOCUS_SESSION_MINUTES) {
+            "Default focus duration must be between 1 and ${TrackingTimerSettings.MAX_FOCUS_SESSION_MINUTES} minutes"
+        }
+        preferences.edit().putInt(KEY_DEFAULT_FOCUS_MINUTES, minutes).apply()
+    }
+
+    fun isOnboardingComplete(): Boolean =
+        preferences.getBoolean(KEY_ONBOARDING_COMPLETE, false)
+
+    fun completeOnboarding() {
+        preferences.edit().putBoolean(KEY_ONBOARDING_COMPLETE, true).apply()
+    }
+
     fun muteBreakReminders(durationMillis: Long) {
         require(durationMillis in TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS) {
             "Break reminder snooze duration must be one of the supported options"
@@ -298,6 +317,8 @@ class TrackingRepository(context: Context) {
         const val KEY_MARATHON_MINUTES = "marathon_minutes"
         const val KEY_FOCUS_BREAK_MINUTES = "focus_break_minutes"
         const val KEY_BREAK_REMINDERS_MUTED_UNTIL = "break_reminders_muted_until"
+        const val KEY_DEFAULT_FOCUS_MINUTES = "default_focus_minutes"
+        const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
     }
 }
 

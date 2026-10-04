@@ -61,6 +61,24 @@ class MainActivity : android.app.Activity() {
     private var buddyMessageIndex = 0
     private var selectedAccent = CORAL
     private var activityResumed = false
+    private var onboardingTourStep = ONBOARDING_SETTINGS_STEP
+    private var onboardingFocusMinutes =
+        (TrackingTimerSettings.FOCUS_SESSION_MILLIS / 60_000L).toInt()
+    private var onboardingMarathonMinutes = TrackingTimerSettings.DEFAULT_MARATHON_MINUTES
+    private var onboardingScreen: View? = null
+    private var onboardingFocusPicker: FocusDurationPicker? = null
+    private val onboardingTour = listOf(
+        "Today: your daily check-in" to
+            "See today’s feed time, scrolls, and habit score at a glance. Pip will help you notice patterns without judgment.",
+        "Time: understand your feed habits" to
+            "Explore your daily time in supported feeds and compare recent days to understand how your routine changes.",
+        "Scrolls: see your activity" to
+            "Review scroll totals, recent sessions, and which supported apps contribute to your daily activity.",
+        "Progress: set intentions" to
+            "Adjust your break reminder, choose a custom focus duration, and start focus whenever you need it.",
+        "Debug: check tracking" to
+            "See what Android accessibility events reach Scroll Starva. Your activity and diagnostics stay on this device."
+    )
     private val diagnosticRefresh = object : Runnable {
         override fun run() {
             if (selectedTab == DashboardTab.DEBUG && ::diagnosticLogView.isInitialized) {
@@ -91,28 +109,16 @@ class MainActivity : android.app.Activity() {
         super.onCreate(savedInstanceState)
         repository = TrackingRepository(this)
         snapshot = repository.snapshot()
-        val focusSession = repository.activeFocusSession()
-        if (focusSession != null) {
-            showFocusScreen(focusSession)
-        } else {
-            setContentView(buildScreen())
-        }
+        onboardingFocusMinutes = repository.defaultFocusMinutes()
+        onboardingMarathonMinutes = repository.marathonMinutes()
+        renderAppState()
     }
 
     override fun onResume() {
         super.onResume()
         activityResumed = true
         if (::repository.isInitialized) {
-            val focusSession = repository.activeFocusSession()
-            if (focusSession != null) {
-                if (!focusMode) showFocusScreen(focusSession)
-                else focusTimerRefresh.run()
-            } else if (focusMode) {
-                leaveFocusMode()
-            } else {
-                refresh()
-                startDiagnosticRefresh()
-            }
+            renderAppState()
         }
     }
 
@@ -129,6 +135,7 @@ class MainActivity : android.app.Activity() {
     }
 
     private fun buildScreen(): View {
+        onboardingScreen = null
         dashboardRoot = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(CREAM)
@@ -193,6 +200,242 @@ class MainActivity : android.app.Activity() {
         dashboardRoot.addView(navigationBar)
         renderTab()
         return dashboardRoot
+    }
+
+    private fun renderAppState() {
+        if (!isAccessibilityEnabled()) {
+            focusMode = false
+            diagnosticHandler.removeCallbacks(focusTimerRefresh)
+            diagnosticHandler.removeCallbacks(diagnosticRefresh)
+            showTrackingSetupScreen()
+            return
+        }
+        if (!repository.isOnboardingComplete()) {
+            focusMode = false
+            diagnosticHandler.removeCallbacks(focusTimerRefresh)
+            showOnboardingScreen()
+            return
+        }
+        val focusSession = repository.activeFocusSession()
+        if (focusSession != null) {
+            if (!focusMode) showFocusScreen(focusSession)
+            else if (activityResumed) focusTimerRefresh.run()
+            return
+        }
+        if (focusMode) {
+            leaveFocusMode()
+            return
+        }
+        if (onboardingScreen != null || !::dashboardRoot.isInitialized) {
+            setContentView(buildScreen())
+        } else {
+            refresh()
+        }
+        startDiagnosticRefresh()
+    }
+
+    private fun showTrackingSetupScreen() {
+        if (onboardingScreen?.tag == TRACKING_SETUP_TAG) {
+            return
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+            setBackgroundColor(CREAM)
+        }
+        root.addView(TextView(this).apply {
+            text = "SCROLL STARVA"
+            textSize = 13f
+            letterSpacing = .18f
+            setTextColor(CORAL_DARK)
+            gravity = Gravity.CENTER
+        })
+        root.addView(FloatingBuddyView().apply {
+            contentDescription = "Pip, your onboarding guide"
+        }, LinearLayout.LayoutParams(dp(96), dp(96)).apply {
+            topMargin = dp(24)
+            bottomMargin = dp(24)
+            gravity = Gravity.CENTER_HORIZONTAL
+        })
+        root.addView(TextView(this).apply {
+            text = "Tracking is off"
+            textSize = 25f
+            setTextColor(INK)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        root.addView(TextView(this).apply {
+            text = "Turn on Scroll Starva’s accessibility tracking to continue. It measures time and scrolls in supported feeds, and keeps your activity on this device."
+            textSize = 16f
+            setTextColor(MUTED)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(24))
+        })
+        root.addView(actionButton("Turn on accessibility tracking") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }, LinearLayout.LayoutParams(-1, -2))
+        onboardingScreen = root.apply { tag = TRACKING_SETUP_TAG }
+        setContentView(root)
+    }
+
+    private fun showOnboardingScreen() {
+        when {
+            onboardingTourStep == ONBOARDING_SETTINGS_STEP -> showOnboardingSettings()
+            else -> showOnboardingTourStep()
+        }
+    }
+
+    private fun showOnboardingSettings() {
+        val root = onboardingRoot()
+        root.addView(FloatingBuddyView().apply {
+            contentDescription = "Pip is helping you set your starting timers"
+            setOnClickListener {
+                playCheer()
+                Toast.makeText(
+                    this@MainActivity,
+                    "Choose a focus duration and a gentle feed-break reminder.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }, LinearLayout.LayoutParams(dp(80), dp(80)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+        })
+        root.addView(TextView(this).apply {
+            text = "Let’s set your starting timers"
+            textSize = 25f
+            setTextColor(INK)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(8))
+        })
+        root.addView(TextView(this).apply {
+            text = "You can change these any time. The break reminder is when Pip gently checks in during a long feed session."
+            textSize = 15f
+            setTextColor(MUTED)
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(12))
+        })
+        root.addView(card {
+            addView(label("DEFAULT FOCUS TIME", CORAL_DARK, 12f))
+            val focusPicker = FocusDurationPicker(
+                this@MainActivity,
+                onboardingFocusMinutes * 60_000L
+            )
+            addView(focusPicker)
+            onboardingFocusPicker = focusPicker
+        })
+        root.addView(card {
+            addView(label("BREAK REMINDER", CORAL_DARK, 12f))
+            val currentMinutes = onboardingMarathonMinutes
+            val reminderLabel = label("Remind me after $currentMinutes minutes", INK, 15f)
+            addView(reminderLabel)
+            addView(SeekBar(this@MainActivity).apply {
+                max = TrackingTimerSettings.MAX_MARATHON_MINUTES -
+                    TrackingTimerSettings.MIN_MARATHON_MINUTES
+                progress = onboardingMarathonMinutes - TrackingTimerSettings.MIN_MARATHON_MINUTES
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        onboardingMarathonMinutes =
+                            progress + TrackingTimerSettings.MIN_MARATHON_MINUTES
+                        reminderLabel.text = "Remind me after $onboardingMarathonMinutes minutes"
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar) = Unit
+                })
+            })
+            addView(label(
+                "${TrackingTimerSettings.MIN_MARATHON_MINUTES}–" +
+                    "${TrackingTimerSettings.MAX_MARATHON_MINUTES} minutes",
+                MUTED,
+                12f
+            ))
+        })
+        root.addView(actionButton("Continue with these timers") {
+            val picker = onboardingFocusPicker
+                ?: error("Focus duration picker is missing from onboarding")
+            onboardingFocusMinutes = (picker.durationMillis / 60_000L).toInt()
+            repository.setDefaultFocusMinutes(onboardingFocusMinutes)
+            repository.setMarathonMinutes(onboardingMarathonMinutes)
+            onboardingTourStep = 0
+            showOnboardingTourStep()
+        })
+        showOnboardingContent(root)
+    }
+
+    private fun showOnboardingTourStep() {
+        val (title, message) = onboardingTour[onboardingTourStep]
+        val root = onboardingRoot()
+        root.addView(FloatingBuddyView().apply {
+            contentDescription = "Pip, your friendly onboarding guide. Tap for encouragement."
+            setOnClickListener {
+                playCheer()
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+            }
+        }, LinearLayout.LayoutParams(dp(96), dp(96)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(16)
+        })
+        root.addView(label("YOUR APP TOUR · ${onboardingTourStep + 1} OF ${onboardingTour.size}", CORAL_DARK, 12f).apply {
+            gravity = Gravity.CENTER
+        })
+        root.addView(TextView(this).apply {
+            text = title
+            textSize = 26f
+            setTextColor(INK)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(8))
+        })
+        root.addView(TextView(this).apply {
+            text = message
+            textSize = 16f
+            setTextColor(MUTED)
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(24))
+        })
+        root.addView(actionButton(
+            if (onboardingTourStep == onboardingTour.lastIndex) "Finish tour" else "Next"
+        ) {
+            if (onboardingTourStep == onboardingTour.lastIndex) {
+                finishOnboarding()
+            } else {
+                onboardingTourStep++
+                showOnboardingTourStep()
+            }
+        })
+        root.addView(Button(this).apply {
+            text = "Skip tour"
+            isAllCaps = false
+            setOnClickListener { finishOnboarding() }
+        })
+        showOnboardingContent(root)
+    }
+
+    private fun onboardingRoot() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(dp(24), dp(24), dp(24), dp(32))
+    }
+
+    private fun showOnboardingContent(content: LinearLayout) {
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(CREAM)
+            isFillViewport = true
+            addView(content, android.view.ViewGroup.LayoutParams(-1, -2))
+        }
+        onboardingScreen = scroll
+        setContentView(scroll)
+    }
+
+    private fun finishOnboarding() {
+        repository.completeOnboarding()
+        onboardingScreen = null
+        selectedTab = DashboardTab.OVERVIEW
+        snapshot = repository.snapshot()
+        setContentView(buildScreen())
+        renderAppState()
     }
 
     private fun navButton(tab: DashboardTab): Button = Button(this).apply {
@@ -471,7 +714,7 @@ class MainActivity : android.app.Activity() {
             })
             val durationPicker = FocusDurationPicker(
                 this@MainActivity,
-                TrackingTimerSettings.FOCUS_SESSION_MILLIS
+                repository.defaultFocusMinutes() * 60_000L
             )
             addView(durationPicker)
             addView(actionButton("Start focus") {
@@ -1140,6 +1383,8 @@ class MainActivity : android.app.Activity() {
     private companion object {
         const val DIAGNOSTIC_REFRESH_MILLIS = 750L
         const val FOCUS_TIMER_REFRESH_MILLIS = 1_000L
+        const val ONBOARDING_SETTINGS_STEP = -1
+        const val TRACKING_SETUP_TAG = "tracking_setup"
         val CREAM = Color.parseColor("#FFF8EF")
         val INK = Color.parseColor("#17202A")
         val MUTED = Color.parseColor("#65727E")
