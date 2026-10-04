@@ -405,9 +405,13 @@ class ScrollAccessibilityService : AccessibilityService() {
         )
         val snoozeOptions = TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS
         var selectedSnoozeIndex = 0
+        val goalWarning = dailyGoalRiskMessage()
         showPromptCard(
-            title = "A gentle pause",
-            message = "You’ve been scrolling for $minutes minutes. A short break can help you return with a clearer mind.",
+            title = if (goalWarning == null) "A gentle pause" else "Protect your streak",
+            message = buildString {
+                append("You’ve been scrolling for $minutes minutes. A short break can help you return with a clearer mind.")
+                if (goalWarning != null) append("\n\n").append(goalWarning)
+            },
             quote = FocusSessionQuotes.random(),
             extraContent = { prompt ->
                 prompt.addView(TextView(this).apply {
@@ -455,6 +459,22 @@ class ScrollAccessibilityService : AccessibilityService() {
                 "Maybe later" to { removeIntervention() }
             )
         )
+    }
+
+    private fun dailyGoalRiskMessage(): String? {
+        val today = repository.snapshot().dailyHistory.lastOrNull() ?: return null
+        val scrollTarget = repository.dailyScrollTarget()
+        val timeTargetSeconds = repository.dailyTimeTargetMinutes() * 60L
+        val scrollsNearLimit = today.scrollCount * 100L >= scrollTarget * 80L
+        val timeNearLimit = today.activeSeconds * 100L >= timeTargetSeconds * 80L
+        if (!scrollsNearLimit && !timeNearLimit) return null
+
+        val goalsAtRisk = buildList {
+            if (scrollsNearLimit) add("scroll")
+            if (timeNearLimit) add("feed-time")
+        }.joinToString(" and ")
+        return "You’re nearing your daily $goalsAtRisk goal. Reaching either limit can end your streak, " +
+            "so a break now can help you stay within your targets."
     }
 
     private fun snoozeDescription(durationMillis: Long): String =

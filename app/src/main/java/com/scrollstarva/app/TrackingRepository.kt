@@ -2,6 +2,7 @@ package com.scrollstarva.app
 
 import android.content.Context
 import java.text.SimpleDateFormat
+import java.time.LocalDate
 import java.util.Date
 import java.util.Locale
 
@@ -41,6 +42,12 @@ object TrackingTimerSettings {
     const val FOCUS_SESSION_MILLIS = 25 * 60 * 1000L
     const val MAX_FOCUS_SESSION_HOURS = 8
     const val MAX_FOCUS_SESSION_MINUTES = MAX_FOCUS_SESSION_HOURS * 60
+    const val DEFAULT_DAILY_SCROLL_TARGET = 100
+    const val MIN_DAILY_SCROLL_TARGET = 10
+    const val MAX_DAILY_SCROLL_TARGET = 1_000
+    const val DEFAULT_DAILY_TIME_TARGET_MINUTES = 60
+    const val MIN_DAILY_TIME_TARGET_MINUTES = 5
+    const val MAX_DAILY_TIME_TARGET_MINUTES = 720
     val BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS = listOf(
         1L * 60_000L,
         2L * 60_000L,
@@ -159,6 +166,111 @@ class TrackingRepository(context: Context) {
             "Default focus duration must be between 1 and ${TrackingTimerSettings.MAX_FOCUS_SESSION_MINUTES} minutes"
         }
         preferences.edit().putInt(KEY_DEFAULT_FOCUS_MINUTES, minutes).apply()
+    }
+
+    fun dailyScrollTarget(): Int = preferences.getInt(
+        KEY_DAILY_SCROLL_TARGET,
+        TrackingTimerSettings.DEFAULT_DAILY_SCROLL_TARGET
+    ).coerceIn(
+        TrackingTimerSettings.MIN_DAILY_SCROLL_TARGET,
+        TrackingTimerSettings.MAX_DAILY_SCROLL_TARGET
+    )
+
+    fun dailyTimeTargetMinutes(): Int = preferences.getInt(
+        KEY_DAILY_TIME_TARGET_MINUTES,
+        TrackingTimerSettings.DEFAULT_DAILY_TIME_TARGET_MINUTES
+    ).coerceIn(
+        TrackingTimerSettings.MIN_DAILY_TIME_TARGET_MINUTES,
+        TrackingTimerSettings.MAX_DAILY_TIME_TARGET_MINUTES
+    )
+
+    fun setDailyGoals(scrollTarget: Int, timeTargetMinutes: Int) {
+        require(scrollTarget in TrackingTimerSettings.MIN_DAILY_SCROLL_TARGET..
+            TrackingTimerSettings.MAX_DAILY_SCROLL_TARGET) {
+            "Daily scroll target must be between ${TrackingTimerSettings.MIN_DAILY_SCROLL_TARGET} and " +
+                TrackingTimerSettings.MAX_DAILY_SCROLL_TARGET
+        }
+        require(timeTargetMinutes in TrackingTimerSettings.MIN_DAILY_TIME_TARGET_MINUTES..
+            TrackingTimerSettings.MAX_DAILY_TIME_TARGET_MINUTES) {
+            "Daily time target must be between ${TrackingTimerSettings.MIN_DAILY_TIME_TARGET_MINUTES} and " +
+                TrackingTimerSettings.MAX_DAILY_TIME_TARGET_MINUTES
+        }
+        finalizeGoalDays(LocalDate.now())
+        preferences.edit()
+            .putInt(KEY_DAILY_SCROLL_TARGET, scrollTarget)
+            .putInt(KEY_DAILY_TIME_TARGET_MINUTES, timeTargetMinutes)
+            .apply()
+    }
+
+    fun dailyGoalStreak(today: LocalDate = LocalDate.now()): Int {
+        finalizeGoalDays(today)
+        val successfulDays = preferences.getStringSet(KEY_GOAL_SUCCESS_DATES, emptySet())
+            .orEmpty()
+        var date = today.minusDays(1)
+        var streak = 0
+        while (date.toString() in successfulDays) {
+            streak++
+            date = date.minusDays(1)
+        }
+        return streak
+    }
+
+    fun bestDailyGoalStreak(today: LocalDate = LocalDate.now()): Int {
+        finalizeGoalDays(today)
+        return preferences.getInt(KEY_BEST_GOAL_STREAK, 0)
+    }
+
+    private fun finalizeGoalDays(today: LocalDate) {
+        val trackingStart = preferences.getString(KEY_GOAL_TRACKING_START_DATE, null)
+            ?.let(LocalDate::parse)
+            ?: today.also {
+                preferences.edit()
+                    .putString(KEY_GOAL_TRACKING_START_DATE, it.toString())
+                    .putString(KEY_GOAL_LAST_EVALUATED_DATE, it.minusDays(1).toString())
+                    .apply()
+            }
+        val lastEvaluated = preferences.getString(KEY_GOAL_LAST_EVALUATED_DATE, null)
+            ?.let(LocalDate::parse)
+            ?: trackingStart.minusDays(1)
+        val yesterday = today.minusDays(1)
+        if (!lastEvaluated.isBefore(yesterday)) return
+
+        val firstDate = maxOf(
+            trackingStart,
+            lastEvaluated.plusDays(1)
+        )
+        val scrollTarget = dailyScrollTarget()
+        val timeTargetSeconds = dailyTimeTargetMinutes() * 60L
+        val successfulDays = preferences.getStringSet(KEY_GOAL_SUCCESS_DATES, emptySet())
+            .orEmpty()
+            .toMutableSet()
+        var date = firstDate
+        while (!date.isAfter(yesterday)) {
+            val metrics = database.dailyRollup(date.toString())
+            if (metrics.visits > 0 &&
+                metrics.scrollCount < scrollTarget &&
+                metrics.activeSeconds < timeTargetSeconds
+            ) {
+                successfulDays += date.toString()
+            }
+            date = date.plusDays(1)
+        }
+        var bestStreak = preferences.getInt(KEY_BEST_GOAL_STREAK, 0)
+        var run = 0
+        var previousDate: LocalDate? = null
+        successfulDays.asSequence()
+            .map(LocalDate::parse)
+            .sorted()
+            .forEach { successDate ->
+                run = if (previousDate?.plusDays(1) == successDate) run + 1 else 1
+                bestStreak = maxOf(bestStreak, run)
+                previousDate = successDate
+            }
+        preferences.edit()
+            .putStringSet(KEY_GOAL_SUCCESS_DATES, successfulDays)
+            .putString(KEY_GOAL_LAST_EVALUATED_DATE, yesterday.toString())
+            .putInt(KEY_BEST_GOAL_STREAK, bestStreak)
+            .apply()
     }
 
     fun isOnboardingComplete(): Boolean =
@@ -339,6 +451,12 @@ class TrackingRepository(context: Context) {
         const val KEY_DEFAULT_FOCUS_MINUTES = "default_focus_minutes"
         const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
         const val KEY_REPEAT_BREAK_REMINDER_AT = "repeat_break_reminder_at"
+        const val KEY_DAILY_SCROLL_TARGET = "daily_scroll_target"
+        const val KEY_DAILY_TIME_TARGET_MINUTES = "daily_time_target_minutes"
+        const val KEY_GOAL_TRACKING_START_DATE = "goal_tracking_start_date"
+        const val KEY_GOAL_LAST_EVALUATED_DATE = "goal_last_evaluated_date"
+        const val KEY_GOAL_SUCCESS_DATES = "goal_success_dates"
+        const val KEY_BEST_GOAL_STREAK = "best_goal_streak"
     }
 }
 

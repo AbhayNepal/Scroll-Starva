@@ -20,6 +20,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.NumberPicker
 import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -29,9 +30,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.max
+import kotlin.math.pow
 
 private enum class DashboardTab(val title: String, val heading: String, val subtitle: String) {
-    OVERVIEW("Today", "Your daily check-in", "A little more awareness, one day at a time."),
+    OVERVIEW("Home", "Your mindful day", "Small choices can build a steadier relationship with your attention."),
     TIME("Time", "Time in your feeds", "Notice your time patterns without judging yourself."),
     SCROLLS("Scrolls", "Your scrolling activity", "Every pause and choice is part of your progress."),
     PROGRESS("Progress", "Your progress", "Progress is personal. Small steps still count."),
@@ -68,8 +70,8 @@ class MainActivity : android.app.Activity() {
     private var onboardingScreen: View? = null
     private var onboardingFocusPicker: FocusDurationPicker? = null
     private val onboardingTour = listOf(
-        "Today: your daily check-in" to
-            "See today’s feed time, scrolls, and habit score at a glance. Pip will help you notice patterns without judgment.",
+        "Home: your daily check-in" to
+            "See your daily goals, mindful score, streak, feed time, and scrolls. Pip will celebrate your progress without judgment.",
         "Time: understand your feed habits" to
             "Explore your daily time in supported feeds and compare recent days to understand how your routine changes.",
         "Scrolls: see your activity" to
@@ -584,6 +586,87 @@ class MainActivity : android.app.Activity() {
 
     private fun buildOverview() {
         val today = snapshot.dailyHistory.lastOrNull()
+        val scrolls = today?.scrollCount ?: 0
+        val activeSeconds = today?.activeSeconds ?: 0L
+        val scrollTarget = repository.dailyScrollTarget()
+        val timeTargetMinutes = repository.dailyTimeTargetMinutes()
+        val onTrack = scrolls < scrollTarget && activeSeconds < timeTargetMinutes * 60L
+        val score = (
+            ((scrollTarget - scrolls).toDouble() / scrollTarget.coerceAtLeast(1)) +
+                ((timeTargetMinutes * 60L - activeSeconds).toDouble() /
+                    (timeTargetMinutes * 60L).coerceAtLeast(1L))
+            ).coerceIn(0.0, 2.0) * 50.0
+        val streak = repository.dailyGoalStreak()
+        val bestStreak = repository.bestDailyGoalStreak()
+        buddyView.setSad(!onTrack)
+
+        pageContent.addView(card {
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(
+                    label("TODAY'S GOALS", if (onTrack) GREEN else CORAL_DARK, 12f),
+                    LinearLayout.LayoutParams(0, -2, 1f)
+                )
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.END
+                    addView(label("YOUR BEST STREAK", MUTED, 10f).apply {
+                        gravity = Gravity.END
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = "🔥 $bestStreak ${if (bestStreak == 1) "day" else "days"}"
+                        textSize = 14f
+                        setTextColor(INK)
+                        setTypeface(typeface, Typeface.BOLD)
+                        gravity = Gravity.END
+                        contentDescription =
+                            "Your all-time best streak: $bestStreak ${if (bestStreak == 1) "day" else "days"}"
+                    })
+                })
+            })
+            addView(GoalFlameView(this@MainActivity, onTrack), LinearLayout.LayoutParams(-1, dp(148)))
+            addView(metric(if (onTrack) "Your flame is burning" else "A limit was crossed", 22f))
+            addView(label(
+                if (onTrack) "Both goals are still within reach." else
+                    "The flame is resting. One tough day doesn’t undo your progress.",
+                MUTED,
+                14f
+            ).apply { setPadding(0, dp(2), 0, dp(8)) })
+            addView(metricRow(
+                "Streak",
+                "$streak ${if (streak == 1) "day" else "days"}",
+                "Mindful score",
+                "${score.toInt()} / 100"
+            ))
+            addView(TextView(this@MainActivity).apply {
+                val quote = if (onTrack) {
+                    dailyMotivationalQuote()
+                } else {
+                    "A hard day does not erase your progress. Pause, be kind to yourself, and begin again."
+                }
+                text = "Pip: “$quote”"
+                textSize = 15f
+                setTextColor(INK)
+                setPadding(0, dp(14), 0, dp(2))
+            })
+            addView(label(
+                "A tracked day adds to your streak at its end when both goals are met.",
+                MUTED,
+                12f
+            ).apply { setPadding(0, dp(8), 0, 0) })
+        })
+
+        pageContent.addView(card {
+            addView(label("YOUR DAILY LIMITS", CORAL_DARK, 12f))
+            addView(metricRow(
+                "Scrolls",
+                "$scrolls / $scrollTarget",
+                "Feed time",
+                "${formatDuration(activeSeconds)} / ${formatDuration(timeTargetMinutes * 60L)}"
+            ))
+        })
+
         pageContent.addView(card {
             addView(label("TODAY'S SUMMARY", CORAL_DARK, 12f))
             addView(metric("You're showing up for yourself.", 22f))
@@ -702,6 +785,8 @@ class MainActivity : android.app.Activity() {
 
     private fun buildProgressTab() {
         val history = snapshot.dailyHistory
+        pageContent.addView(sectionTitle("Daily goals"))
+        pageContent.addView(dailyGoalSettingsCard())
         pageContent.addView(sectionTitle("Timers & focus"))
         pageContent.addView(timerSettingsCard())
         pageContent.addView(card {
@@ -756,6 +841,52 @@ class MainActivity : android.app.Activity() {
                 setTextColor(INK)
                 setPadding(0, dp(8), 0, 0)
             })
+        })
+    }
+
+    private fun dailyGoalSettingsCard(): View = card {
+        addView(label("SET YOUR DAILY LIMITS", CORAL_DARK, 12f))
+        val scrollPicker = NumberPicker(this@MainActivity).apply {
+            minValue = TrackingTimerSettings.MIN_DAILY_SCROLL_TARGET
+            maxValue = TrackingTimerSettings.MAX_DAILY_SCROLL_TARGET
+            value = repository.dailyScrollTarget()
+            wrapSelectorWheel = false
+            descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
+            contentDescription = "Daily scroll goal"
+        }
+        val timePicker = NumberPicker(this@MainActivity).apply {
+            minValue = TrackingTimerSettings.MIN_DAILY_TIME_TARGET_MINUTES
+            maxValue = TrackingTimerSettings.MAX_DAILY_TIME_TARGET_MINUTES
+            value = repository.dailyTimeTargetMinutes()
+            wrapSelectorWheel = false
+            descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
+            contentDescription = "Daily feed time goal in minutes"
+        }
+        val pickers = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                addView(label("Scrolls", MUTED, 13f), LinearLayout.LayoutParams(-1, -2))
+                addView(scrollPicker, LinearLayout.LayoutParams(-1, dp(110)))
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                addView(label("Minutes", MUTED, 13f), LinearLayout.LayoutParams(-1, -2))
+                addView(timePicker, LinearLayout.LayoutParams(-1, dp(110)))
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        addView(pickers)
+        addView(label(
+            "A tracked day counts toward your streak when both totals stay below these limits.",
+            MUTED,
+            13f
+        ).apply { setPadding(0, dp(4), 0, dp(10)) })
+        addView(actionButton("Save daily goals") {
+            repository.setDailyGoals(scrollPicker.value, timePicker.value)
+            refresh()
+            Toast.makeText(this@MainActivity, "Daily goals saved", Toast.LENGTH_SHORT).show()
         })
     }
 
@@ -1071,10 +1202,21 @@ class MainActivity : android.app.Activity() {
         buddyView.playCheer()
     }
 
+    private fun dailyMotivationalQuote(): String {
+        val quotes = listOf(
+            "Every mindful choice feeds your flame. Keep choosing what matters.",
+            "Your attention is yours to guide, one small moment at a time.",
+            "You are building a habit, not chasing perfection.",
+            "A little awareness today can make room for what matters tomorrow."
+        )
+        return quotes[java.time.LocalDate.now().dayOfYear % quotes.size]
+    }
+
     private inner class FloatingBuddyView : View(this@MainActivity) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private var bobOffset = 0f
         private var cheerAmount = 0f
+        private var isSad = false
         private val bobAnimator = ValueAnimator.ofFloat(-3f, 3f).apply {
             duration = 1_350
             repeatCount = ValueAnimator.INFINITE
@@ -1120,6 +1262,16 @@ class MainActivity : android.app.Activity() {
                     animate().rotation(0f).scaleX(1f).scaleY(1f).setDuration(220).start()
                 }
                 .start()
+        }
+
+        fun setSad(sad: Boolean) {
+            isSad = sad
+            contentDescription = if (sad) {
+                "Pip looks a little sad because a daily goal was crossed."
+            } else {
+                "Pip is cheering you on."
+            }
+            invalidate()
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -1175,7 +1327,13 @@ class MainActivity : android.app.Activity() {
             paint.color = INK
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = 1.6f
-            canvas.drawArc(RectF(-4f, -3f, 4f, 4f), 15f, 150f, false, paint)
+            if (isSad) {
+                canvas.drawLine(-10f, -12f, -4f, -10f, paint)
+                canvas.drawLine(4f, -10f, 10f, -12f, paint)
+                canvas.drawArc(RectF(-4f, -1f, 4f, 6f), 200f, 140f, false, paint)
+            } else {
+                canvas.drawArc(RectF(-4f, -3f, 4f, 4f), 15f, 150f, false, paint)
+            }
             paint.style = Paint.Style.FILL
 
             paint.color = PURPLE
@@ -1198,6 +1356,200 @@ class MainActivity : android.app.Activity() {
             }
             canvas.drawPath(spark, paint)
         }
+    }
+
+    private inner class GoalFlameView(
+        context: android.content.Context,
+        private val burning: Boolean
+    ) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var animationAttached = false
+        private var animationStartedAt = 0L
+
+        init {
+            contentDescription = if (burning) {
+                "A live animated flame showing both daily goals are on track."
+            } else {
+                "Live smoke animation above an extinguished flame because a daily goal was crossed."
+            }
+        }
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            animationAttached = true
+            animationStartedAt = android.os.SystemClock.uptimeMillis()
+            invalidate()
+        }
+
+        override fun onDetachedFromWindow() {
+            animationAttached = false
+            super.onDetachedFromWindow()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val scale = minOf(width / 120f, height / 140f)
+            canvas.save()
+            canvas.translate(width / 2f, height / 2f + dp(6))
+            canvas.scale(scale, scale)
+            paint.style = Paint.Style.FILL
+            val elapsedMillis = android.os.SystemClock.uptimeMillis() - animationStartedAt
+
+            if (burning) {
+                val firePhase = (elapsedMillis % FIRE_ANIMATION_MILLIS).toFloat() /
+                    FIRE_ANIMATION_MILLIS
+                val wave = kotlin.math.sin(firePhase * Math.PI * 2).toFloat()
+                val flicker = (wave + 1f) / 2f
+                val sway = wave * 9f
+                paint.color = Color.argb(
+                    (35f + flicker * 35f).toInt(),
+                    242,
+                    107,
+                    53
+                )
+                canvas.drawOval(RectF(-38f, -31f - flicker * 5f, 38f, 57f), paint)
+                paint.color = Color.parseColor("#F26B35")
+                paint.shader = android.graphics.LinearGradient(
+                    0f,
+                    -42f,
+                    0f,
+                    52f,
+                    intArrayOf(
+                        Color.parseColor("#FFF7B0"),
+                        Color.parseColor("#FFB52E"),
+                        Color.parseColor("#F26B35"),
+                        Color.parseColor("#C93C24")
+                    ),
+                    null,
+                    android.graphics.Shader.TileMode.CLAMP
+                )
+                canvas.drawPath(flamePath(firePhase, 1f, -38f, 51f), paint)
+                paint.shader = null
+                paint.shader = android.graphics.LinearGradient(
+                    0f,
+                    -10f,
+                    0f,
+                    51f,
+                    intArrayOf(
+                        Color.parseColor("#FFFDE0"),
+                        Color.parseColor("#FFE36A"),
+                        Color.parseColor("#FF9A24")
+                    ),
+                    null,
+                    android.graphics.Shader.TileMode.CLAMP
+                )
+                canvas.drawPath(flamePath(firePhase + .24f, .53f, -13f, 51f), paint)
+                paint.shader = null
+                paint.color = Color.parseColor("#FFFBE0")
+                val coreWidth = 7f + flicker * 3f
+                canvas.drawOval(
+                    RectF(-coreWidth + sway * .2f, 27f - flicker * 3f,
+                        coreWidth + sway * .2f, 49f),
+                    paint
+                )
+                paint.color = GOLD
+                for (index in 0..2) {
+                    val emberPhase = (firePhase + index / 3f) % 1f
+                    val emberY = 27f - emberPhase * 58f
+                    val emberX = kotlin.math.sin((emberPhase + index) * Math.PI * 2).toFloat() * 22f
+                    paint.alpha = ((1f - emberPhase) * 210f).toInt().coerceIn(0, 210)
+                    canvas.drawCircle(emberX, emberY, 1.5f + (1f - emberPhase), paint)
+                }
+                paint.alpha = 255
+            } else {
+                val smokePhase = (elapsedMillis % SMOKE_ANIMATION_MILLIS).toFloat() /
+                    SMOKE_ANIMATION_MILLIS
+                drawSmokeColumn(canvas, smokePhase, -9f, .0f)
+                drawSmokeColumn(canvas, (smokePhase + .5f) % 1f, 9f, .35f)
+            }
+            paint.color = Color.parseColor("#8C5D47")
+            canvas.drawRoundRect(RectF(-30f, 51f, 30f, 59f), 4f, 4f, paint)
+            canvas.restore()
+            if (animationAttached) postInvalidateOnAnimation()
+        }
+
+        private fun drawSmokeColumn(
+            canvas: Canvas,
+            phase: Float,
+            initialDrift: Float,
+            phaseOffset: Float
+        ) {
+            val path = Path()
+            val steps = 44
+            for (index in 0..steps) {
+                val progress = index / steps.toFloat()
+                val y = 45f - progress * 92f
+                val amplitude = 4f + progress * 9f
+                val wave = kotlin.math.sin(
+                    (progress * 2.6f - phase + phaseOffset) * Math.PI * 2
+                ).toFloat()
+                val secondaryWave = kotlin.math.sin(
+                    (progress * 5.1f + phase * .7f + phaseOffset) * Math.PI * 2
+                ).toFloat()
+                val x = initialDrift + wave * amplitude + secondaryWave * 2.5f * progress
+                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+
+            paint.style = Paint.Style.STROKE
+            paint.strokeCap = Paint.Cap.ROUND
+            paint.strokeJoin = Paint.Join.ROUND
+            paint.strokeWidth = 19f
+            paint.shader = android.graphics.LinearGradient(
+                0f,
+                45f,
+                0f,
+                -47f,
+                intArrayOf(
+                    Color.argb(0, 125, 135, 145),
+                    Color.argb(95, 125, 135, 145),
+                    Color.argb(55, 145, 152, 160),
+                    Color.argb(0, 145, 152, 160)
+                ),
+                null,
+                android.graphics.Shader.TileMode.CLAMP
+            )
+            canvas.drawPath(path, paint)
+            paint.shader = null
+            paint.style = Paint.Style.FILL
+        }
+
+        private fun flamePath(
+            phase: Float,
+            widthScale: Float,
+            tipY: Float,
+            baseY: Float
+        ): Path {
+            val path = Path()
+            val steps = 28
+            val height = baseY - tipY
+            path.moveTo(-3f * widthScale, baseY)
+            for (index in 0..steps) {
+                val t = 1f - index / steps.toFloat()
+                val y = tipY + height * t
+                val envelope = kotlin.math.sin(t * Math.PI).toFloat()
+                val halfWidth = (5f + 26f * envelope.pow(.72f)) * widthScale
+                val edgeWave = kotlin.math.sin(phase * Math.PI * 2 + t * Math.PI * 5).toFloat()
+                val centerDrift = kotlin.math.sin(phase * Math.PI * 2 + t * Math.PI * 1.7).toFloat() *
+                    5f * envelope
+                val leftEdge = centerDrift - halfWidth + edgeWave * 3.5f * envelope * widthScale
+                path.lineTo(leftEdge, y)
+            }
+            for (index in 0..steps) {
+                val t = index / steps.toFloat()
+                val y = tipY + height * t
+                val envelope = kotlin.math.sin(t * Math.PI).toFloat()
+                val halfWidth = (5f + 26f * envelope.pow(.72f)) * widthScale
+                val edgeWave = kotlin.math.sin(phase * Math.PI * 2 + t * Math.PI * 5 + 1.1).toFloat()
+                val centerDrift = kotlin.math.sin(phase * Math.PI * 2 + t * Math.PI * 1.7).toFloat() *
+                    5f * envelope
+                val rightEdge = centerDrift + halfWidth + edgeWave * 3.5f * envelope * widthScale
+                path.lineTo(rightEdge, y)
+            }
+            path.lineTo(3f * widthScale, baseY)
+            path.close()
+            return path
+        }
+
     }
 
     private fun animatePageIn() {
@@ -1383,6 +1735,8 @@ class MainActivity : android.app.Activity() {
     private companion object {
         const val DIAGNOSTIC_REFRESH_MILLIS = 750L
         const val FOCUS_TIMER_REFRESH_MILLIS = 1_000L
+        const val FIRE_ANIMATION_MILLIS = 850L
+        const val SMOKE_ANIMATION_MILLIS = 2_100L
         const val ONBOARDING_SETTINGS_STEP = -1
         const val TRACKING_SETUP_TAG = "tracking_setup"
         val CREAM = Color.parseColor("#FFF8EF")
