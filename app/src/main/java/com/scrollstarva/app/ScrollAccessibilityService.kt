@@ -38,9 +38,11 @@ class ScrollAccessibilityService : AccessibilityService() {
     private var lastScrollAt = 0L
     private var lastLegacyScrollPosition: LegacyScrollPosition? = null
     private var marathonReminderShown = false
-    private var nextMarathonReminderAtElapsed = 0L
     private var interventionView: android.view.View? = null
     private val delayedStop = Runnable { stopTracking() }
+    private val repeatMarathonReminderRunnable = Runnable {
+        showPendingMarathonReminderIfDue()
+    }
     private val focusReminderRunnable = Runnable {
         if (repository.isFocusReminderDue()) {
             repository.markFocusReminderShown()
@@ -50,6 +52,7 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     private val flushTimer = object : Runnable {
         override fun run() {
+            showPendingMarathonReminderIfDue()
             checkpointAndCheckInterventions()
             handler.postDelayed(this, CHECKPOINT_INTERVAL_MILLIS)
         }
@@ -74,6 +77,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         repository.finishInterruptedSessions()
         AccessibilityDiagnostics.record("Accessibility service connected and tracking enabled")
         scheduleFocusReminder()
+        schedulePendingMarathonReminder()
         handler.postDelayed(flushTimer, CHECKPOINT_INTERVAL_MILLIS)
     }
 
@@ -139,6 +143,7 @@ class ScrollAccessibilityService : AccessibilityService() {
 
         handler.removeCallbacks(delayedStop)
         startTracking(platform)
+        showPendingMarathonReminderIfDue()
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED && isVerticalScroll(event)) {
             val now = SystemClock.elapsedRealtime()
             if (now - lastScrollAt > SCROLL_DEBOUNCE_MILLIS) {
@@ -183,7 +188,6 @@ class ScrollAccessibilityService : AccessibilityService() {
         lastScrollAt = 0L
         lastLegacyScrollPosition = null
         marathonReminderShown = false
-        nextMarathonReminderAtElapsed = 0L
 
         AccessibilityDiagnostics.record(
             "Session started\nApp: ${platform.label}\n" +
@@ -219,7 +223,6 @@ class ScrollAccessibilityService : AccessibilityService() {
         lastCheckpointElapsed = 0L
         sessionScrollCount = 0
         marathonReminderShown = false
-        nextMarathonReminderAtElapsed = 0L
     }
 
     private fun scheduleStopTracking() {
@@ -243,6 +246,7 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun checkpointAndCheckInterventions() {
+        showPendingMarathonReminderIfDue()
         val activityId = trackingActivityId ?: return
         val nowElapsed = SystemClock.elapsedRealtime()
         val duration = maxOf(0L, nowElapsed - trackingStartedAtElapsed)
@@ -296,19 +300,43 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun maybeShowMarathonReminder(nowElapsed: Long) {
-        if (marathonReminderShown || repository.areBreakRemindersMuted()) {
+        if (repository.repeatBreakReminderAtMillis() > 0L ||
+            marathonReminderShown ||
+            repository.areBreakRemindersMuted()
+        ) {
             return
         }
-        val reminderIntervalMillis = repository.marathonMinutes() * 60_000L
-        val nextReminderAt = if (nextMarathonReminderAtElapsed > 0L) {
-            nextMarathonReminderAtElapsed
-        } else {
-            feedStartedAtElapsed + reminderIntervalMillis
-        }
+        val reminderIntervalMillis = marathonReminderIntervalMillis()
+        val nextReminderAt = feedStartedAtElapsed + reminderIntervalMillis
         if (nowElapsed < nextReminderAt) return
 
         marathonReminderShown = true
-        nextMarathonReminderAtElapsed = 0L
+        showMarathonReminder()
+    }
+
+    private fun schedulePendingMarathonReminder() {
+        handler.removeCallbacks(repeatMarathonReminderRunnable)
+        val reminderAtMillis = repository.repeatBreakReminderAtMillis()
+        if (reminderAtMillis == 0L) return
+        handler.postDelayed(
+            repeatMarathonReminderRunnable,
+            (reminderAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+        )
+    }
+
+    private fun showPendingMarathonReminderIfDue() {
+        val reminderAtMillis = repository.repeatBreakReminderAtMillis()
+        if (reminderAtMillis == 0L || reminderAtMillis > System.currentTimeMillis() ||
+            trackingActivityId == null || trackingPackage == null ||
+            repository.activeFocusSession() != null ||
+            repository.areBreakRemindersMuted() ||
+            interventionView != null
+        ) {
+            return
+        }
+        handler.removeCallbacks(repeatMarathonReminderRunnable)
+        repository.clearRepeatBreakReminder()
+        marathonReminderShown = true
         showMarathonReminder()
     }
 
@@ -412,16 +440,15 @@ class ScrollAccessibilityService : AccessibilityService() {
             },
             actions = listOf(
                 "Start focus" to { startFocusSession(durationPicker.durationMillis) },
-                "Remind me again in ${repository.marathonMinutes()} minutes" to {
-                    nextMarathonReminderAtElapsed =
-                        SystemClock.elapsedRealtime() + repository.marathonMinutes() * 60_000L
+                "Remind me again in ${marathonReminderIntervalLabel()}" to {
+                    repository.scheduleBreakReminderAgain(marathonReminderIntervalMillis())
                     marathonReminderShown = false
                     removeIntervention()
+                    schedulePendingMarathonReminder()
                 },
                 "Mute break reminders" to {
-                    repository.muteBreakReminders(
-                        TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS[selectedSnoozeIndex]
-                    )
+                    repository.muteBreakReminders(snoozeOptions[selectedSnoozeIndex])
+                    handler.removeCallbacks(repeatMarathonReminderRunnable)
                     marathonReminderShown = false
                     removeIntervention()
                 },
@@ -433,13 +460,20 @@ class ScrollAccessibilityService : AccessibilityService() {
     private fun snoozeDescription(durationMillis: Long): String =
         "Don’t bother me for the next ${snoozeWheelLabel(durationMillis)}."
 
+    private fun marathonReminderIntervalMillis(): Long =
+        repository.marathonMinutes() * 60_000L
+
+    private fun marathonReminderIntervalLabel(): String =
+        "${repository.marathonMinutes()} minutes"
+
     private fun snoozeWheelLabel(durationMillis: Long): String =
-        if (durationMillis < 60 * 60_000L) {
+        if (durationMillis < 60_000L) {
+            "${durationMillis / 1_000L} sec"
+        } else if (durationMillis < 60 * 60_000L) {
             "${durationMillis / 60_000L} min"
         } else {
             "${durationMillis / (60 * 60_000L)} hour${if (durationMillis >= 2 * 60 * 60_000L) "s" else ""}"
         }
-
 
     private fun showPromptCard(
         title: String,

@@ -42,6 +42,9 @@ object TrackingTimerSettings {
     const val MAX_FOCUS_SESSION_HOURS = 8
     const val MAX_FOCUS_SESSION_MINUTES = MAX_FOCUS_SESSION_HOURS * 60
     val BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS = listOf(
+        1L * 60_000L,
+        2L * 60_000L,
+        5L * 60_000L,
         15L * 60_000L,
         30L * 60_000L,
         60L * 60_000L,
@@ -171,11 +174,26 @@ class TrackingRepository(context: Context) {
         }
         preferences.edit()
             .putLong(KEY_BREAK_REMINDERS_MUTED_UNTIL, System.currentTimeMillis() + durationMillis)
+            .remove(KEY_REPEAT_BREAK_REMINDER_AT)
             .apply()
     }
 
     fun areBreakRemindersMuted(nowMillis: Long = System.currentTimeMillis()): Boolean =
         preferences.getLong(KEY_BREAK_REMINDERS_MUTED_UNTIL, 0L) > nowMillis
+
+    fun scheduleBreakReminderAgain(delayMillis: Long) {
+        require(delayMillis > 0L) { "Break reminder delay must be positive" }
+        preferences.edit()
+            .putLong(KEY_REPEAT_BREAK_REMINDER_AT, System.currentTimeMillis() + delayMillis)
+            .apply()
+    }
+
+    fun repeatBreakReminderAtMillis(): Long =
+        preferences.getLong(KEY_REPEAT_BREAK_REMINDER_AT, 0L)
+
+    fun clearRepeatBreakReminder() {
+        preferences.edit().remove(KEY_REPEAT_BREAK_REMINDER_AT).apply()
+    }
 
     fun focusBreakMinutes(): Int {
         val maxBreak = TrackingTimerSettings.maxFocusBreakMinutes(marathonMinutes())
@@ -199,6 +217,7 @@ class TrackingRepository(context: Context) {
         preferences.edit()
             .putLong(KEY_FOCUS_ENDS_AT, focusSession.endsAtMillis)
             .putString(KEY_FOCUS_QUOTE, focusSession.quote)
+            .remove(KEY_REPEAT_BREAK_REMINDER_AT)
             .remove(KEY_FOCUS_PAUSED_REMAINING)
             .remove(KEY_FOCUS_REMINDER_AT)
             .apply()
@@ -319,6 +338,7 @@ class TrackingRepository(context: Context) {
         const val KEY_BREAK_REMINDERS_MUTED_UNTIL = "break_reminders_muted_until"
         const val KEY_DEFAULT_FOCUS_MINUTES = "default_focus_minutes"
         const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
+        const val KEY_REPEAT_BREAK_REMINDER_AT = "repeat_break_reminder_at"
     }
 }
 
