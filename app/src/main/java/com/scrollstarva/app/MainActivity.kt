@@ -34,7 +34,7 @@ import kotlin.math.pow
 
 private enum class DashboardTab(val title: String, val heading: String, val subtitle: String) {
     OVERVIEW("Home", "Your mindful day", "Small choices can build a steadier relationship with your attention."),
-    TIME("Time", "Time in your feeds", "Notice your time patterns without judging yourself."),
+    TIME("Time", "Time in supported apps", "Notice your time patterns without judging yourself."),
     SCROLLS("Scrolls", "Your scrolling activity", "Every pause and choice is part of your progress."),
     PROGRESS("Progress", "Your progress", "Progress is personal. Small steps still count."),
     DEBUG("Debug", "Tracking diagnostics", "See exactly what Android sends to the tracker.")
@@ -71,9 +71,9 @@ class MainActivity : android.app.Activity() {
     private var onboardingFocusPicker: FocusDurationPicker? = null
     private val onboardingTour = listOf(
         "Home: your daily check-in" to
-            "See your daily goals, mindful score, streak, feed time, and scrolls. Pip will celebrate your progress without judgment.",
+            "See your daily goals, mindful score, streak, supported-app time, and scrolls. Pip will celebrate your progress without judgment.",
         "Time: understand your feed habits" to
-            "Explore your daily time in supported feeds and compare recent days to understand how your routine changes.",
+            "Explore your daily time in supported apps and compare recent days to understand how your routine changes.",
         "Scrolls: see your activity" to
             "Review scroll totals, recent sessions, and which supported apps contribute to your daily activity.",
         "Progress: set intentions" to
@@ -268,7 +268,7 @@ class MainActivity : android.app.Activity() {
             gravity = Gravity.CENTER
         })
         root.addView(TextView(this).apply {
-            text = "Turn on Scroll Starva’s accessibility tracking to continue. It measures time and scrolls in supported feeds, and keeps your activity on this device."
+            text = "Turn on Scroll Starva’s accessibility tracking to continue. It measures foreground time in supported apps and scrolls in detected short-form feeds. Your activity stays on this device."
             textSize = 16f
             setTextColor(MUTED)
             gravity = Gravity.CENTER
@@ -662,7 +662,7 @@ class MainActivity : android.app.Activity() {
             addView(metricRow(
                 "Scrolls",
                 "$scrolls / $scrollTarget",
-                "Feed time",
+                "App time",
                 "${formatDuration(activeSeconds)} / ${formatDuration(timeTargetMinutes * 60L)}"
             ))
         })
@@ -682,7 +682,7 @@ class MainActivity : android.app.Activity() {
         val checkIn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         checkIn.addView(
             metricRow(
-                "Feed time",
+                "App foreground",
                 formatDuration(today?.activeSeconds ?: 0),
                 "Scrolls",
                 (today?.scrollCount ?: 0).toString()
@@ -725,9 +725,9 @@ class MainActivity : android.app.Activity() {
         pageContent.addView(card {
             addView(label("TODAY", CORAL_DARK, 12f))
             addView(metric(formatDuration(today?.activeSeconds ?: 0), 32f))
-            addView(label("in supported short-form feeds", MUTED, 14f))
+            addView(label("while supported apps are in the foreground", MUTED, 14f))
         })
-        pageContent.addView(sectionTitle("Daily feed time · last 15 days"))
+        pageContent.addView(sectionTitle("Daily app foreground time · last 15 days"))
         pageContent.addView(chartCard(
             points = history.map {
                 ChartPoint(chartDate(it.date), it.activeSeconds.toFloat(), detailDate(it.date))
@@ -745,9 +745,9 @@ class MainActivity : android.app.Activity() {
             addView(label("A gentle perspective", CORAL_DARK, 12f))
             addView(TextView(this@MainActivity).apply {
                 text = if (activeDays.isEmpty()) {
-                    "As you use tracked feeds, this chart will start to reveal your own pattern."
+                    "As you use supported apps, this chart will start to reveal your own pattern."
                 } else {
-                    "On days with tracked feed activity, your average is ${formatDuration(average)}. Use this as information, not a judgment."
+                    "On days with supported app activity, your average foreground time is ${formatDuration(average)}. Use this as information, not a judgment."
                 }
                 textSize = 15f
                 setTextColor(INK)
@@ -772,7 +772,7 @@ class MainActivity : android.app.Activity() {
             style = ChartStyle.BARS,
             valueFormatter = { String.format(Locale.US, "%.0f", it) }
         ))
-        pageContent.addView(sectionTitle("Recent feed sessions"))
+        pageContent.addView(sectionTitle("Recent supported app sessions"))
         pageContent.addView(activityFeedCard(snapshot.activities))
         pageContent.addView(sectionTitle("Scrolls by app today"))
         pageContent.addView(card {
@@ -846,6 +846,28 @@ class MainActivity : android.app.Activity() {
 
     private fun dailyGoalSettingsCard(): View = card {
         addView(label("SET YOUR DAILY LIMITS", CORAL_DARK, 12f))
+        lateinit var goalsDisplay: LinearLayout
+        lateinit var goalsEditor: LinearLayout
+        goalsDisplay = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(metricRow(
+                "Scroll limit",
+                "${repository.dailyScrollTarget()} scrolls",
+                "Time limit",
+                formatDuration(repository.dailyTimeTargetMinutes() * 60L)
+            ))
+            addView(actionButton("Edit goals") {
+                goalsDisplay.visibility = View.GONE
+                goalsEditor.visibility = View.VISIBLE
+            }.apply {
+                setTextColor(CORAL_DARK)
+                background = roundedBackground(Color.parseColor("#FFF1ED"), dp(12).toFloat())
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        }
+        goalsEditor = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
         val scrollPicker = NumberPicker(this@MainActivity).apply {
             minValue = TrackingTimerSettings.MIN_DAILY_SCROLL_TARGET
             maxValue = TrackingTimerSettings.MAX_DAILY_SCROLL_TARGET
@@ -860,7 +882,7 @@ class MainActivity : android.app.Activity() {
             value = repository.dailyTimeTargetMinutes()
             wrapSelectorWheel = false
             descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
-            contentDescription = "Daily feed time goal in minutes"
+            contentDescription = "Daily supported-app foreground time goal in minutes"
         }
         val pickers = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -877,17 +899,29 @@ class MainActivity : android.app.Activity() {
                 addView(timePicker, LinearLayout.LayoutParams(-1, dp(110)))
             }, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        addView(pickers)
+        goalsEditor.addView(pickers)
         addView(label(
             "A tracked day counts toward your streak when both totals stay below these limits.",
             MUTED,
             13f
         ).apply { setPadding(0, dp(4), 0, dp(10)) })
-        addView(actionButton("Save daily goals") {
-            repository.setDailyGoals(scrollPicker.value, timePicker.value)
-            refresh()
-            Toast.makeText(this@MainActivity, "Daily goals saved", Toast.LENGTH_SHORT).show()
+        goalsEditor.addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(actionButton("Save") {
+                repository.setDailyGoals(scrollPicker.value, timePicker.value)
+                refresh()
+                Toast.makeText(this@MainActivity, "Daily goals saved", Toast.LENGTH_SHORT).show()
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(actionButton("Cancel") {
+                goalsEditor.visibility = View.GONE
+                goalsDisplay.visibility = View.VISIBLE
+            }.apply {
+                setTextColor(CORAL_DARK)
+                background = roundedBackground(Color.parseColor("#FFF1ED"), dp(12).toFloat())
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(8) })
         })
+        addView(goalsDisplay)
+        addView(goalsEditor)
     }
 
     private fun timerSettingsCard(): View = card {
@@ -999,7 +1033,7 @@ class MainActivity : android.app.Activity() {
 
     private fun activityFeedCard(activities: List<ScrollActivity>): View = card {
         if (activities.isEmpty()) {
-            addView(label("Tracked feed sessions will show up here.", MUTED, 14f))
+            addView(label("Supported-app foreground sessions will show up here.", MUTED, 14f))
             return@card
         }
         activities.take(10).forEachIndexed { index, activity ->
@@ -1589,9 +1623,9 @@ class MainActivity : android.app.Activity() {
         }
         val changePercent = ((previousTime - recentTime) * 100.0 / previousTime).toInt()
         return when {
-            changePercent >= 5 -> "Your tracked feed time is down about $changePercent% compared with the previous week. That steady effort is worth celebrating."
+            changePercent >= 5 -> "Your supported-app foreground time is down about $changePercent% compared with the previous week. That steady effort is worth celebrating."
             changePercent > -5 -> "Your tracked pattern is holding fairly steady. If you want, try one small intentional pause today; there’s no need to change everything at once."
-            else -> "Your tracked feed time has been higher lately. That’s information, not failure—one small pause today can be a fresh start."
+            else -> "Your supported-app foreground time has been higher lately. That’s information, not failure—one small pause today can be a fresh start."
         }
     }
 

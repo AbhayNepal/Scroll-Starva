@@ -29,10 +29,10 @@ class ScrollAccessibilityService : AccessibilityService() {
     private var trackingPackage: String? = null
     private var trackingPlatform: FeedPlatform? = null
     private var trackingActivityId: String? = null
-    private var lastWindowStatePackage: String? = null
     private var trackingStartedAtElapsed = 0L
     private var trackingStartedAtWall = 0L
     private var feedStartedAtElapsed = 0L
+    private var trackingFeedActive = false
     private var lastCheckpointElapsed = 0L
     private var sessionScrollCount = 0
     private var lastScrollAt = 0L
@@ -76,6 +76,19 @@ class ScrollAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         repository.finishInterruptedSessions()
         AccessibilityDiagnostics.record("Accessibility service connected and tracking enabled")
+        val activeWindow = rootInActiveWindow
+        val activePlatform = activeWindow?.packageName?.toString()?.let(FeedDetector::platformFor)
+        if (activePlatform != null) {
+            startTracking(activePlatform)
+            trackingFeedActive = FeedDetector.isShortFormFeed(
+                FeedDetector.visibleLabels(activeWindow),
+                activePlatform
+            )
+            if (trackingFeedActive) {
+                feedStartedAtElapsed = SystemClock.elapsedRealtime()
+                showPendingMarathonReminderIfDue()
+            }
+        }
         scheduleFocusReminder()
         schedulePendingMarathonReminder()
         handler.postDelayed(flushTimer, CHECKPOINT_INTERVAL_MILLIS)
@@ -85,12 +98,9 @@ class ScrollAccessibilityService : AccessibilityService() {
         val packageName = event.packageName?.toString()
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             if (packageName == this.packageName || packageName?.let(FeedDetector::platformFor) == null) {
-                lastWindowStatePackage = null
                 if (trackingPackage != null) scheduleStopTracking()
                 return
             }
-            if (lastWindowStatePackage == packageName) return
-            lastWindowStatePackage = packageName
         }
 
         if (packageName == this.packageName) return
@@ -109,8 +119,9 @@ class ScrollAccessibilityService : AccessibilityService() {
             }
         }
 
+        val appForegroundEvent = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         val continuingTrackedFeed = event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED &&
-            trackingPackage == platform.packageName
+            trackingPackage == platform.packageName && trackingFeedActive
         val sourceLabels = if (continuingTrackedFeed) "" else FeedDetector.visibleLabels(event.source)
         val windowLabels = if (continuingTrackedFeed) "" else FeedDetector.visibleLabels(rootInActiveWindow)
         val visibleLabels = listOf(sourceLabels, windowLabels)
@@ -133,16 +144,17 @@ class ScrollAccessibilityService : AccessibilityService() {
             )
         }
 
-        if (!feedVisible && !continuingTrackedFeed) {
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-                AccessibilityDiagnostics.record("Decision: schedule tracking stop in ${FEED_EXIT_GRACE_MILLIS}ms (feed not detected)")
-                scheduleStopTracking()
-            }
+        if (!appForegroundEvent && !feedVisible && !continuingTrackedFeed) {
             return
         }
 
         handler.removeCallbacks(delayedStop)
         startTracking(platform)
+        if (feedVisible && !trackingFeedActive) {
+            feedStartedAtElapsed = SystemClock.elapsedRealtime()
+            marathonReminderShown = false
+        }
+        trackingFeedActive = feedVisible
         showPendingMarathonReminderIfDue()
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED && isVerticalScroll(event)) {
             val now = SystemClock.elapsedRealtime()
@@ -182,6 +194,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         trackingActivityId = session.activityId
         trackingStartedAtElapsed = SystemClock.elapsedRealtime()
         feedStartedAtElapsed = trackingStartedAtElapsed
+        trackingFeedActive = false
         trackingStartedAtWall = nowWall
         lastCheckpointElapsed = trackingStartedAtElapsed
         sessionScrollCount = 0
@@ -220,6 +233,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         trackingStartedAtElapsed = 0L
         trackingStartedAtWall = 0L
         feedStartedAtElapsed = 0L
+        trackingFeedActive = false
         lastCheckpointElapsed = 0L
         sessionScrollCount = 0
         marathonReminderShown = false
@@ -300,7 +314,8 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun maybeShowMarathonReminder(nowElapsed: Long) {
-        if (repository.repeatBreakReminderAtMillis() > 0L ||
+        if (!trackingFeedActive ||
+            repository.repeatBreakReminderAtMillis() > 0L ||
             marathonReminderShown ||
             repository.areBreakRemindersMuted()
         ) {
@@ -328,6 +343,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         val reminderAtMillis = repository.repeatBreakReminderAtMillis()
         if (reminderAtMillis == 0L || reminderAtMillis > System.currentTimeMillis() ||
             trackingActivityId == null || trackingPackage == null ||
+            !trackingFeedActive ||
             repository.activeFocusSession() != null ||
             repository.areBreakRemindersMuted() ||
             interventionView != null
