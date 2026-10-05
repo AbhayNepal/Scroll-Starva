@@ -948,7 +948,7 @@ class MainActivity : android.app.Activity() {
         })
         addView(label(
             "${TrackingTimerSettings.MIN_MARATHON_MINUTES}–" +
-                "${TrackingTimerSettings.MAX_MARATHON_MINUTES} minutes in tracked feeds",
+                "${TrackingTimerSettings.MAX_MARATHON_MINUTES} minutes in supported apps",
             MUTED,
             12f
         ))

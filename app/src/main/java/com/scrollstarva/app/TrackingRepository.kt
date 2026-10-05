@@ -34,7 +34,7 @@ data class FocusSession(
 
 object TrackingTimerSettings {
     const val DEFAULT_MARATHON_MINUTES = 20
-    const val MIN_MARATHON_MINUTES = 5
+    const val MIN_MARATHON_MINUTES = 1
     const val MAX_MARATHON_MINUTES = 120
     const val DEFAULT_FOCUS_BREAK_MINUTES = 2
     const val MIN_FOCUS_BREAK_MINUTES = 1

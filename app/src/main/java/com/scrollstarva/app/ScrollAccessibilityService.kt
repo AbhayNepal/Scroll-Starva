@@ -31,7 +31,6 @@ class ScrollAccessibilityService : AccessibilityService() {
     private var trackingActivityId: String? = null
     private var trackingStartedAtElapsed = 0L
     private var trackingStartedAtWall = 0L
-    private var feedStartedAtElapsed = 0L
     private var trackingFeedActive = false
     private var lastCheckpointElapsed = 0L
     private var sessionScrollCount = 0
@@ -85,7 +84,6 @@ class ScrollAccessibilityService : AccessibilityService() {
                 activePlatform
             )
             if (trackingFeedActive) {
-                feedStartedAtElapsed = SystemClock.elapsedRealtime()
                 showPendingMarathonReminderIfDue()
             }
         }
@@ -150,10 +148,6 @@ class ScrollAccessibilityService : AccessibilityService() {
 
         handler.removeCallbacks(delayedStop)
         startTracking(platform)
-        if (feedVisible && !trackingFeedActive) {
-            feedStartedAtElapsed = SystemClock.elapsedRealtime()
-            marathonReminderShown = false
-        }
         trackingFeedActive = feedVisible
         showPendingMarathonReminderIfDue()
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED && isVerticalScroll(event)) {
@@ -193,7 +187,6 @@ class ScrollAccessibilityService : AccessibilityService() {
         trackingPlatform = platform
         trackingActivityId = session.activityId
         trackingStartedAtElapsed = SystemClock.elapsedRealtime()
-        feedStartedAtElapsed = trackingStartedAtElapsed
         trackingFeedActive = false
         trackingStartedAtWall = nowWall
         lastCheckpointElapsed = trackingStartedAtElapsed
@@ -232,7 +225,6 @@ class ScrollAccessibilityService : AccessibilityService() {
         trackingActivityId = null
         trackingStartedAtElapsed = 0L
         trackingStartedAtWall = 0L
-        feedStartedAtElapsed = 0L
         trackingFeedActive = false
         lastCheckpointElapsed = 0L
         sessionScrollCount = 0
@@ -314,7 +306,8 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun maybeShowMarathonReminder(nowElapsed: Long) {
-        if (!trackingFeedActive ||
+        if (trackingActivityId == null ||
+            trackingPackage == null ||
             repository.repeatBreakReminderAtMillis() > 0L ||
             marathonReminderShown ||
             repository.areBreakRemindersMuted()
@@ -322,7 +315,7 @@ class ScrollAccessibilityService : AccessibilityService() {
             return
         }
         val reminderIntervalMillis = marathonReminderIntervalMillis()
-        val nextReminderAt = feedStartedAtElapsed + reminderIntervalMillis
+        val nextReminderAt = trackingStartedAtElapsed + reminderIntervalMillis
         if (nowElapsed < nextReminderAt) return
 
         marathonReminderShown = true
@@ -343,7 +336,6 @@ class ScrollAccessibilityService : AccessibilityService() {
         val reminderAtMillis = repository.repeatBreakReminderAtMillis()
         if (reminderAtMillis == 0L || reminderAtMillis > System.currentTimeMillis() ||
             trackingActivityId == null || trackingPackage == null ||
-            !trackingFeedActive ||
             repository.activeFocusSession() != null ||
             repository.areBreakRemindersMuted() ||
             interventionView != null
@@ -357,7 +349,7 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun showMarathonReminder() {
-        showBreakPrompt(maxOf(0L, SystemClock.elapsedRealtime() - feedStartedAtElapsed))
+        showBreakPrompt(maxOf(0L, SystemClock.elapsedRealtime() - trackingStartedAtElapsed))
     }
 
     private fun showFocusInterruptionPrompt() {
@@ -415,6 +407,7 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     private fun showBreakPrompt(elapsedMillis: Long) {
         val minutes = elapsedMillis / 60_000L
+        val appLabel = trackingPlatform?.label ?: "this app"
         val durationPicker = FocusDurationPicker(
             this,
             repository.defaultFocusMinutes() * 60_000L
@@ -425,7 +418,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         showPromptCard(
             title = if (goalWarning == null) "A gentle pause" else "Protect your streak",
             message = buildString {
-                append("You’ve been scrolling for $minutes minutes. A short break can help you return with a clearer mind.")
+                append("You’ve been using $appLabel for $minutes minutes. A short break can help you return with a clearer mind.")
                 if (goalWarning != null) append("\n\n").append(goalWarning)
             },
             quote = FocusSessionQuotes.random(),
