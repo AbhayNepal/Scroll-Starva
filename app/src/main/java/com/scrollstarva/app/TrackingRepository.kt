@@ -313,8 +313,18 @@ class TrackingRepository(context: Context) {
             .apply()
     }
 
+    fun breakRemindersMutedUntilMillis(): Long =
+        preferences.getLong(KEY_BREAK_REMINDERS_MUTED_UNTIL, 0L)
+            .takeIf { it > System.currentTimeMillis() } ?: 0L
+
     fun areBreakRemindersMuted(nowMillis: Long = System.currentTimeMillis()): Boolean =
         preferences.getLong(KEY_BREAK_REMINDERS_MUTED_UNTIL, 0L) > nowMillis
+
+    fun unmuteBreakReminders() {
+        preferences.edit()
+            .remove(KEY_BREAK_REMINDERS_MUTED_UNTIL)
+            .apply()
+    }
 
     fun scheduleBreakReminderAgain(delayMillis: Long) {
         require(delayMillis > 0L) { "Break reminder delay must be positive" }

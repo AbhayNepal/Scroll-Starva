@@ -628,6 +628,38 @@ class MainActivity : android.app.Activity() {
         val bestStreak = repository.bestDailyGoalStreak()
         buddyView.setSad(!onTrack)
 
+        val mutedUntilMillis = repository.breakRemindersMutedUntilMillis()
+        if (mutedUntilMillis > 0L) {
+            val remainingMinutes = ((mutedUntilMillis - System.currentTimeMillis() + 59_999L) / 60_000L)
+            pageContent.addView(card {
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(TextView(this@MainActivity).apply {
+                        text = "🔇"
+                        textSize = 20f
+                        contentDescription = "Muted"
+                    }, LinearLayout.LayoutParams(dp(34), -2))
+                    addView(label("BREAK REMINDERS MUTED", CORAL_DARK, 12f),
+                        LinearLayout.LayoutParams(0, -2, 1f))
+                })
+                addView(label(
+                    "Reminders are paused for ${formatDuration(remainingMinutes * 60L)}. Unmute any time to receive them again.",
+                    MUTED,
+                    14f
+                ).apply { setPadding(0, dp(8), 0, dp(12)) })
+                addView(actionButton("Unmute reminders") {
+                    repository.unmuteBreakReminders()
+                    refresh()
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Break reminders are unmuted",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                })
+            })
+        }
+
         pageContent.addView(card {
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL

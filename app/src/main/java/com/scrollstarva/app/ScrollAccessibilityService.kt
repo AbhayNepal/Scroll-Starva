@@ -11,6 +11,7 @@ import android.os.SystemClock
 import android.content.Intent
 import android.view.Gravity
 import android.view.WindowManager
+import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
@@ -400,19 +401,19 @@ class ScrollAccessibilityService : AccessibilityService() {
                     swipeDpPerStep = 20f
                 )
                 breakPicker.onValueChanged = { selectedBreakMinutes = it }
-                prompt.addView(breakPicker)
+                addPromptSelector(prompt, breakPicker)
+                addPromptAction(prompt, "Take this scroll break", primary = true) {
+                    repository.setFocusBreakMinutes(selectedBreakMinutes)
+                    if (repository.pauseFocusForScrollBreak(selectedBreakMinutes * 60_000L) != null) {
+                        scheduleFocusReminder()
+                    }
+                    removeIntervention()
+                }
             },
             actions = listOf(
                 "End focus early" to {
                     handler.removeCallbacks(focusReminderRunnable)
                     repository.endFocusSession()
-                    removeIntervention()
-                },
-                "Take this scroll break" to {
-                    repository.setFocusBreakMinutes(selectedBreakMinutes)
-                    if (repository.pauseFocusForScrollBreak(selectedBreakMinutes * 60_000L) != null) {
-                        scheduleFocusReminder()
-                    }
                     removeIntervention()
                 },
                 "Resume focus" to {
@@ -449,15 +450,17 @@ class ScrollAccessibilityService : AccessibilityService() {
                     setTextColor(Color.parseColor("#65727E"))
                     setPadding(0, dp(4), 0, 0)
                 })
-                prompt.addView(durationPicker)
+                addPromptSelector(prompt, durationPicker)
+                addPromptAction(prompt, "Start focus", primary = true) {
+                    startFocusSession(durationPicker.durationMillis)
+                }
                 val snoozeLabel = TextView(this).apply {
                     text = snoozeDescription(snoozeOptions[selectedSnoozeIndex])
                     textSize = 14f
                     setTextColor(Color.parseColor("#65727E"))
                     setPadding(0, dp(4), 0, 0)
                 }
-                prompt.addView(snoozeLabel)
-                prompt.addView(NumberPicker(this).apply {
+                addPromptSelector(prompt, NumberPicker(this).apply {
                     minValue = snoozeOptions.indices.first
                     maxValue = snoozeOptions.indices.last
                     displayedValues = snoozeOptions.map(::snoozeWheelLabel).toTypedArray()
@@ -469,21 +472,21 @@ class ScrollAccessibilityService : AccessibilityService() {
                         selectedSnoozeIndex = index
                         snoozeLabel.text = snoozeDescription(snoozeOptions[index])
                     }
-                }, LinearLayout.LayoutParams(-1, dp(96)))
+                }, dp(96))
+                prompt.addView(snoozeLabel)
+                addPromptAction(prompt, "Mute break reminders", primary = true) {
+                    repository.muteBreakReminders(snoozeOptions[selectedSnoozeIndex])
+                    handler.removeCallbacks(repeatMarathonReminderRunnable)
+                    marathonReminderShown = false
+                    removeIntervention()
+                }
             },
             actions = listOf(
-                "Start focus" to { startFocusSession(durationPicker.durationMillis) },
                 "Remind me again in ${marathonReminderIntervalLabel()}" to {
                     repository.scheduleBreakReminderAgain(marathonReminderIntervalMillis())
                     marathonReminderShown = false
                     removeIntervention()
                     schedulePendingMarathonReminder()
-                },
-                "Mute break reminders" to {
-                    repository.muteBreakReminders(snoozeOptions[selectedSnoozeIndex])
-                    handler.removeCallbacks(repeatMarathonReminderRunnable)
-                    marathonReminderShown = false
-                    removeIntervention()
                 },
                 "Maybe later" to { removeIntervention() }
             )
@@ -562,18 +565,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         })
         extraContent?.invoke(root)
         actions.forEachIndexed { index, (actionText, action) ->
-            root.addView(Button(this).apply {
-                text = actionText
-                isAllCaps = false
-                if (index == 0) {
-                    setTextColor(Color.WHITE)
-                    background = GradientDrawable().apply {
-                        setColor(Color.parseColor("#F26B5E"))
-                        cornerRadius = dp(12).toFloat()
-                    }
-                }
-                setOnClickListener { action() }
-            })
+            addPromptAction(root, actionText, primary = index == 0, action = action)
         }
 
         val params = WindowManager.LayoutParams(
@@ -592,6 +584,57 @@ class ScrollAccessibilityService : AccessibilityService() {
         }
         windowManager.addView(root, params)
         interventionView = root
+    }
+
+    private fun addPromptSelector(parent: LinearLayout, selector: View, height: Int? = null) {
+        val inset = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), 0, dp(12), 0)
+            addView(selector, LinearLayout.LayoutParams(-1, height ?: -2))
+        }
+        parent.addView(inset, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(2)
+            bottomMargin = dp(4)
+        })
+    }
+
+    private fun addPromptAction(
+        parent: LinearLayout,
+        text: String,
+        primary: Boolean,
+        action: () -> Unit
+    ) {
+        val availableWidthDp =
+            (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt()
+        val buttonWidth = dp(minOf(250, availableWidthDp - 112).coerceAtLeast(180))
+        val button = Button(this).apply {
+            this.text = text
+            textSize = 14f
+            maxLines = 2
+            minWidth = 0
+            minimumWidth = 0
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            isAllCaps = false
+            setTextColor(if (primary) Color.WHITE else Color.parseColor("#17202A"))
+            background = GradientDrawable().apply {
+                setColor(
+                    if (primary) Color.parseColor("#F26B5E")
+                    else Color.parseColor("#F3E8DC")
+                )
+                cornerRadius = dp(12).toFloat()
+            }
+            setOnClickListener { action() }
+        }
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(button, LinearLayout.LayoutParams(buttonWidth, -2))
+        }
+        parent.addView(actionRow, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(8)
+            bottomMargin = dp(8)
+        })
     }
 
     private fun startFocusSession(durationMillis: Long) {
