@@ -33,6 +33,7 @@ import android.view.animation.OvershootInterpolator
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.pow
 
@@ -69,6 +70,8 @@ class MainActivity : android.app.Activity() {
     private lateinit var focusTimerView: TextView
     private lateinit var focusStatusView: TextView
     private val diagnosticHandler = Handler(Looper.getMainLooper())
+    private val appMetadataExecutor = Executors.newSingleThreadExecutor()
+    private var installedTrackedAppsCache: List<InstalledTrackedApp>? = null
     private var selectedTab = DashboardTab.OVERVIEW
     private var buddyMessageIndex = 0
     private var selectedAccent = CORAL
@@ -121,6 +124,7 @@ class MainActivity : android.app.Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = TrackingRepository(this)
+        preloadInstalledTrackedApps()
         snapshot = repository.snapshot()
         onboardingFocusMinutes = repository.defaultFocusMinutes()
         onboardingMarathonMinutes = repository.marathonMinutes()
@@ -145,7 +149,22 @@ class MainActivity : android.app.Activity() {
 
     override fun onDestroy() {
         diagnosticHandler.removeCallbacksAndMessages(null)
+        appMetadataExecutor.shutdownNow()
         super.onDestroy()
+    }
+
+    private fun preloadInstalledTrackedApps() {
+        appMetadataExecutor.execute {
+            val apps = queryInstalledTrackedApps()
+            runOnUiThread {
+                installedTrackedAppsCache = apps
+                if (!isFinishing && !isDestroyed && activityResumed &&
+                    onboardingScreen == null && ::dashboardRoot.isInitialized && !focusMode
+                ) {
+                    refresh()
+                }
+            }
+        }
     }
 
     private fun buildScreen(): View {
@@ -984,7 +1003,9 @@ class MainActivity : android.app.Activity() {
             addView(row)
             if (app != installedApps.lastOrNull()) addView(divider())
         }
-        if (installedApps.isEmpty()) {
+        if (installedTrackedAppsCache == null) {
+            addView(label("Loading installed apps…", MUTED, 14f))
+        } else if (installedApps.isEmpty()) {
             addView(label(
                 if (readOnly) "No selected apps are currently installed." else
                     "No launchable apps were found.",
@@ -996,6 +1017,10 @@ class MainActivity : android.app.Activity() {
 
     private fun selectedAppInsights(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
+        if (installedTrackedAppsCache == null) {
+            addView(label("Loading app insights…", MUTED, 14f))
+            return@apply
+        }
         val selectedPackages = repository.selectedPackages()
         val installedByPackage = installedTrackedApps().associateBy { it.packageName }
         val installedSelectedApps = selectedPackages
@@ -1031,6 +1056,10 @@ class MainActivity : android.app.Activity() {
     }
 
     private fun installedTrackedApps(): List<InstalledTrackedApp> {
+        return installedTrackedAppsCache.orEmpty()
+    }
+
+    private fun queryInstalledTrackedApps(): List<InstalledTrackedApp> {
         val launchIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return packageManager.queryIntentActivities(launchIntent, 0)
             .asSequence()
