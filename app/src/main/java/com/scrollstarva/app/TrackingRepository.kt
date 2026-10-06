@@ -9,6 +9,7 @@ import java.util.Locale
 data class TrackingSnapshot(
     val scrolls: Int,
     val scrollsByPlatform: Map<FeedPlatform, Int>,
+    val scrollsByPackage: Map<String, Int>,
     val activeMillis: Long,
     val distanceKm: Double,
     val analyticsActiveSeconds: Long,
@@ -59,7 +60,7 @@ object TrackingTimerSettings {
     )
 
     fun maxFocusBreakMinutes(marathonMinutes: Int): Int =
-        minOf(MAX_FOCUS_BREAK_MINUTES, marathonMinutes - 1)
+        minOf(MAX_FOCUS_BREAK_MINUTES, maxOf(MIN_FOCUS_BREAK_MINUTES, marathonMinutes - 1))
 }
 
 class TrackingRepository(context: Context) {
@@ -80,6 +81,7 @@ class TrackingRepository(context: Context) {
         return TrackingSnapshot(
             scrolls = scrolls,
             scrollsByPlatform = scrollsByPlatform,
+            scrollsByPackage = database.dailyScrollCountsByPackage(today()),
             activeMillis = activeMillis,
             distanceKm = scrolls * heightMeters / 1000.0,
             analyticsActiveSeconds = daily.activeSeconds,
@@ -95,12 +97,14 @@ class TrackingRepository(context: Context) {
         )
     }
 
-    fun addScroll(platform: FeedPlatform) {
+    fun addScroll(packageName: String) {
         resetLegacyCountersIfNeeded()
-        preferences.edit()
+        val editor = preferences.edit()
             .putInt(KEY_SCROLLS, preferences.getInt(KEY_SCROLLS, 0) + 1)
-            .putInt(scrollKey(platform), preferences.getInt(scrollKey(platform), 0) + 1)
-            .apply()
+        FeedPlatform.entries.firstOrNull { it.packageName == packageName }?.let { platform ->
+            editor.putInt(scrollKey(platform), preferences.getInt(scrollKey(platform), 0) + 1)
+        }
+        editor.apply()
     }
 
     fun addActiveMillis(millis: Long) {
@@ -112,10 +116,10 @@ class TrackingRepository(context: Context) {
     }
 
     fun beginSession(
-        platform: FeedPlatform,
+        packageName: String,
         startedAtMillis: Long,
         countAsReentry: Boolean = true
-    ): SessionStart = database.beginSession(platform, startedAtMillis, countAsReentry)
+    ): SessionStart = database.beginSession(packageName, startedAtMillis, countAsReentry)
 
     fun recordSessionScroll(activityId: String) = database.recordScroll(activityId)
 
@@ -153,6 +157,25 @@ class TrackingRepository(context: Context) {
         preferences.edit()
             .putInt(KEY_MARATHON_MINUTES, minutes)
             .putInt(KEY_FOCUS_BREAK_MINUTES, focusBreakMinutes().coerceAtMost(maxBreak))
+            .apply()
+    }
+
+    fun selectedPackages(): Set<String> {
+        if (!preferences.contains(KEY_SELECTED_PLATFORMS)) {
+            return FeedPlatform.entries.map { it.packageName }.toSet()
+        }
+        return preferences.getStringSet(KEY_SELECTED_PLATFORMS, emptySet())
+            .orEmpty()
+            .map { savedValue ->
+                FeedPlatform.entries.firstOrNull { it.name == savedValue }?.packageName ?: savedValue
+            }
+            .toSet()
+    }
+
+    fun setSelectedPackages(packageNames: Set<String>) {
+        require(packageNames.isNotEmpty()) { "Select at least one app to track" }
+        preferences.edit()
+            .putStringSet(KEY_SELECTED_PLATFORMS, packageNames)
             .apply()
     }
 
@@ -446,6 +469,7 @@ class TrackingRepository(context: Context) {
         const val KEY_FOCUS_PAUSED_REMAINING = "focus_paused_remaining"
         const val KEY_FOCUS_REMINDER_AT = "focus_reminder_at"
         const val KEY_MARATHON_MINUTES = "marathon_minutes"
+        const val KEY_SELECTED_PLATFORMS = "selected_platforms"
         const val KEY_FOCUS_BREAK_MINUTES = "focus_break_minutes"
         const val KEY_BREAK_REMINDERS_MUTED_UNTIL = "break_reminders_muted_until"
         const val KEY_DEFAULT_FOCUS_MINUTES = "default_focus_minutes"

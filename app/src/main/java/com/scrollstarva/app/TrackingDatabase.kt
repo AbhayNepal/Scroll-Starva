@@ -97,7 +97,7 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
     }
 
     fun beginSession(
-        platform: FeedPlatform,
+        packageName: String,
         startedAtMillis: Long,
         countAsReentry: Boolean
     ): SessionStart {
@@ -112,7 +112,7 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             ORDER BY end_timestamp DESC
             LIMIT 1
             """.trimIndent(),
-            arrayOf(platform.packageName)
+            arrayOf(packageName)
         ).use { cursor ->
             if (cursor.moveToFirst()) previousEnd = cursor.getLong(0)
         }
@@ -121,7 +121,7 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         val id = UUID.randomUUID().toString()
         val values = ContentValues().apply {
             put("activity_id", id)
-            put("target_app_package", platform.packageName)
+            put("target_app_package", packageName)
             put("date_key", date.toString())
             put("start_timestamp", startedAtMillis)
             put("end_timestamp", startedAtMillis)
@@ -131,6 +131,24 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         db.insertOrThrow("scroll_activities", null, values)
         refreshRollup(date)
         return SessionStart(id, rapid)
+    }
+
+    fun dailyScrollCountsByPackage(date: String): Map<String, Int> {
+        val counts = mutableMapOf<String, Int>()
+        readableDatabase.rawQuery(
+            """
+            SELECT target_app_package, COALESCE(SUM(stroke_count), 0)
+            FROM scroll_activities
+            WHERE date_key = ?
+            GROUP BY target_app_package
+            """.trimIndent(),
+            arrayOf(date)
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                counts[cursor.getString(0)] = cursor.getInt(1)
+            }
+        }
+        return counts
     }
 
     fun recordScroll(activityId: String) {

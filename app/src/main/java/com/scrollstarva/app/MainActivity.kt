@@ -3,12 +3,14 @@ package com.scrollstarva.app
 import android.content.Intent
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.app.AlertDialog
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.animation.ValueAnimator
 import android.os.Bundle
@@ -19,7 +21,9 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.ImageView
 import android.widget.NumberPicker
 import android.widget.SeekBar
 import android.widget.ScrollView
@@ -44,6 +48,12 @@ private enum class ChartStyle { BARS, LINE }
 
 private data class ChartPoint(val label: String, val value: Float, val detailLabel: String = label)
 
+private data class InstalledTrackedApp(
+    val packageName: String,
+    val label: String,
+    val icon: Drawable
+)
+
 class MainActivity : android.app.Activity() {
     private lateinit var repository: TrackingRepository
     private lateinit var dashboardRoot: LinearLayout
@@ -67,6 +77,7 @@ class MainActivity : android.app.Activity() {
     private var onboardingFocusMinutes =
         (TrackingTimerSettings.FOCUS_SESSION_MILLIS / 60_000L).toInt()
     private var onboardingMarathonMinutes = TrackingTimerSettings.DEFAULT_MARATHON_MINUTES
+    private var onboardingSelectedPackages = FeedPlatform.entries.map { it.packageName }.toMutableSet()
     private var onboardingScreen: View? = null
     private var onboardingFocusPicker: FocusDurationPicker? = null
     private val onboardingTour = listOf(
@@ -113,6 +124,7 @@ class MainActivity : android.app.Activity() {
         snapshot = repository.snapshot()
         onboardingFocusMinutes = repository.defaultFocusMinutes()
         onboardingMarathonMinutes = repository.marathonMinutes()
+        onboardingSelectedPackages = repository.selectedPackages().toMutableSet()
         renderAppState()
     }
 
@@ -319,6 +331,17 @@ class MainActivity : android.app.Activity() {
             setPadding(0, 0, 0, dp(12))
         })
         root.addView(card {
+            addView(label("APPS TO TRACK", CORAL_DARK, 12f))
+            addView(label(
+                "Choose which supported apps count toward your time, goals, and scroll totals.",
+                MUTED,
+                14f
+            ).apply { setPadding(0, dp(6), 0, dp(8)) })
+            addView(ScrollView(this@MainActivity).apply {
+                addView(appSelectionRows(onboardingSelectedPackages))
+            }, LinearLayout.LayoutParams(-1, dp(240)))
+        })
+        root.addView(card {
             addView(label("DEFAULT FOCUS TIME", CORAL_DARK, 12f))
             val focusPicker = FocusDurationPicker(
                 this@MainActivity,
@@ -360,6 +383,11 @@ class MainActivity : android.app.Activity() {
             onboardingFocusMinutes = (picker.durationMillis / 60_000L).toInt()
             repository.setDefaultFocusMinutes(onboardingFocusMinutes)
             repository.setMarathonMinutes(onboardingMarathonMinutes)
+            if (onboardingSelectedPackages.isEmpty()) {
+                Toast.makeText(this, "Select at least one app to track", Toast.LENGTH_SHORT).show()
+                return@actionButton
+            }
+            repository.setSelectedPackages(onboardingSelectedPackages)
             onboardingTourStep = 0
             showOnboardingTourStep()
         })
@@ -776,15 +804,14 @@ class MainActivity : android.app.Activity() {
         pageContent.addView(activityFeedCard(snapshot.activities))
         pageContent.addView(sectionTitle("Scrolls by app today"))
         pageContent.addView(card {
-            FeedPlatform.entries.forEach { platform ->
-                val count = snapshot.scrollsByPlatform[platform] ?: 0
-                addView(metricRow(platform.label, count.toString(), null, null))
-            }
+            addView(selectedAppInsights())
         })
     }
 
     private fun buildProgressTab() {
         val history = snapshot.dailyHistory
+        pageContent.addView(sectionTitle("Apps to track"))
+        pageContent.addView(selectedAppsSettingsCard())
         pageContent.addView(sectionTitle("Daily goals"))
         pageContent.addView(dailyGoalSettingsCard())
         pageContent.addView(sectionTitle("Timers & focus"))
@@ -842,6 +869,151 @@ class MainActivity : android.app.Activity() {
                 setPadding(0, dp(8), 0, 0)
             })
         })
+    }
+
+    private fun selectedAppsSettingsCard(): View = card {
+        addView(label("TRACK YOUR SELECTED APPS", CORAL_DARK, 12f))
+        val selected = repository.selectedPackages().toMutableSet()
+        addView(appSelectionRows(selected, readOnly = true).apply {
+            setPadding(0, dp(8), 0, dp(12))
+        })
+        addView(actionButton("Choose apps") {
+            val dialogSelection = repository.selectedPackages().toMutableSet()
+            val appChoices = appSelectionRows(dialogSelection)
+            val scrollView = ScrollView(this@MainActivity).apply {
+                setPadding(dp(24), dp(8), dp(24), dp(8))
+                addView(appChoices)
+            }
+            val dialog = AlertDialog.Builder(this@MainActivity)
+                .setTitle("Apps to track")
+                .setView(scrollView)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", null)
+                .create()
+            dialog.setOnShowListener {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                    if (dialogSelection.isEmpty()) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Select at least one app to track",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        repository.setSelectedPackages(dialogSelection)
+                        refresh()
+                        dialog.dismiss()
+                    }
+                }
+            }
+            dialog.show()
+        })
+    }
+
+    private fun appSelectionRows(
+        selectedPackages: MutableSet<String>,
+        readOnly: Boolean = false
+    ): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        val installedApps = installedTrackedApps()
+            .filter { !readOnly || it.packageName in selectedPackages }
+        installedApps.forEach { app ->
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(5), dp(4), dp(5))
+                val icon = ImageView(this@MainActivity).apply {
+                    setImageDrawable(app.icon)
+                    contentDescription = "${app.label} app icon"
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                }
+                addView(icon, LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                    marginEnd = dp(12)
+                })
+                if (readOnly) {
+                    addView(label(app.label, INK, 15f), LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(label(
+                        "${snapshot.scrollsByPackage[app.packageName] ?: 0} scrolls",
+                        MUTED,
+                        13f
+                    ))
+                } else {
+                    val checkBox = CheckBox(this@MainActivity).apply {
+                        text = app.label
+                        textSize = 15f
+                        isChecked = app.packageName in selectedPackages
+                        setOnCheckedChangeListener { _, checked ->
+                            if (checked) selectedPackages.add(app.packageName)
+                            else selectedPackages.remove(app.packageName)
+                        }
+                    }
+                    addView(checkBox, LinearLayout.LayoutParams(0, -2, 1f))
+                }
+            }
+            addView(row)
+            if (app != installedApps.lastOrNull()) addView(divider())
+        }
+        if (installedApps.isEmpty()) {
+            addView(label(
+                if (readOnly) "No selected apps are currently installed." else
+                    "No launchable apps were found.",
+                MUTED,
+                14f
+            ))
+        }
+    }
+
+    private fun selectedAppInsights(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        val selectedPackages = repository.selectedPackages()
+        val installedByPackage = installedTrackedApps().associateBy { it.packageName }
+        val installedSelectedApps = selectedPackages
+            .mapNotNull(installedByPackage::get)
+            .sortedBy { it.label.lowercase(Locale.getDefault()) }
+        installedSelectedApps.forEachIndexed { index, app ->
+                val row = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    val icon = ImageView(this@MainActivity).apply {
+                        setImageDrawable(app.icon)
+                        contentDescription = "${app.label} app icon"
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                    }
+                    addView(icon, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                        marginEnd = dp(12)
+                    })
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        addView(label(app.label, MUTED, 13f))
+                        addView(metric(
+                            "${snapshot.scrollsByPackage[app.packageName] ?: 0} scrolls",
+                            20f
+                        ))
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                }
+                addView(row)
+                if (index < installedSelectedApps.lastIndex) addView(divider())
+            }
+        if (installedSelectedApps.isEmpty()) {
+            addView(label("No selected app scrolls yet.", MUTED, 14f))
+        }
+    }
+
+    private fun installedTrackedApps(): List<InstalledTrackedApp> {
+        val launchIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return packageManager.queryIntentActivities(launchIntent, 0)
+            .asSequence()
+            .map { resolveInfo ->
+                val packageName = resolveInfo.activityInfo.packageName
+                InstalledTrackedApp(
+                    packageName = packageName,
+                    label = resolveInfo.loadLabel(packageManager).toString(),
+                    icon = resolveInfo.loadIcon(packageManager)
+                )
+            }
+            .filter { it.packageName != packageName }
+            .distinctBy { it.packageName }
+            .sortedBy { it.label.lowercase(Locale.getDefault()) }
+            .toList()
     }
 
     private fun dailyGoalSettingsCard(): View = card {
@@ -1036,10 +1208,11 @@ class MainActivity : android.app.Activity() {
             addView(label("Supported-app foreground sessions will show up here.", MUTED, 14f))
             return@card
         }
+        val appsByPackage = installedTrackedApps().associateBy { it.packageName }
         activities.take(10).forEachIndexed { index, activity ->
-            val appName = FeedPlatform.entries
-                .firstOrNull { it.packageName == activity.packageName }
-                ?.label ?: activity.packageName
+            val appName = appsByPackage[activity.packageName]?.label
+                ?: FeedPlatform.entries.firstOrNull { it.packageName == activity.packageName }?.label
+                ?: activity.packageName
             val time = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
                 .format(Date(activity.startMillis))
             val type = when {
@@ -1052,15 +1225,28 @@ class MainActivity : android.app.Activity() {
             } else {
                 0.0
             }
-            addView(TextView(this@MainActivity).apply {
-                text = "$time | $appName | ${formatDuration(activity.durationSeconds)}\n" +
-                    "$type · ${activity.strokeCount} scrolls · " +
-                    "${String.format(Locale.US, "%.1f", activity.averageCadenceSpm)} SPM · " +
-                    "${String.format(Locale.US, "%.1f", dwell)}s per scroll" +
-                    if (activity.isRapidReentry) "\nOpened again within five minutes" else ""
-                textSize = 14f
-                setTextColor(INK)
-                setPadding(0, dp(10), 0, dp(10))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                appsByPackage[activity.packageName]?.let { app ->
+                    addView(ImageView(this@MainActivity).apply {
+                        setImageDrawable(app.icon)
+                        contentDescription = "$appName app icon"
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                    }, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                        marginEnd = dp(10)
+                    })
+                }
+                addView(TextView(this@MainActivity).apply {
+                    text = "$time | $appName | ${formatDuration(activity.durationSeconds)}\n" +
+                        "$type · ${activity.strokeCount} scrolls · " +
+                        "${String.format(Locale.US, "%.1f", activity.averageCadenceSpm)} SPM · " +
+                        "${String.format(Locale.US, "%.1f", dwell)}s per scroll" +
+                        if (activity.isRapidReentry) "\nOpened again within five minutes" else ""
+                    textSize = 14f
+                    setTextColor(INK)
+                    setPadding(0, dp(10), 0, dp(10))
+                }, LinearLayout.LayoutParams(0, -2, 1f))
             })
             if (index < minOf(activities.size, 10) - 1) addView(divider())
         }
