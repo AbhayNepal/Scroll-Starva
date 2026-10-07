@@ -24,6 +24,20 @@ data class TrackingSnapshot(
     val dailyHistory: List<HabitDay>
 )
 
+data class MorningRecap(
+    val date: LocalDate,
+    val metrics: DailyRollup,
+    val previousDayMetrics: DailyRollup,
+    val streak: Int,
+    val bestStreak: Int,
+    val metGoals: Boolean
+)
+
+enum class DailyLimitType {
+    SCROLLS,
+    TIME
+}
+
 data class FocusSession(
     val endsAtMillis: Long,
     val quote: String,
@@ -207,6 +221,36 @@ class TrackingRepository(context: Context) {
         TrackingTimerSettings.MAX_DAILY_TIME_TARGET_MINUTES
     )
 
+    fun dailyLimitsAtEightyPercent(today: LocalDate = LocalDate.now()): Set<DailyLimitType> {
+        val metrics = database.dailyRollup(today.toString())
+        return buildSet {
+            if (metrics.scrollCount * 100L >= dailyScrollTarget() * 80L) {
+                add(DailyLimitType.SCROLLS)
+            }
+            if (metrics.activeSeconds * 100L >= dailyTimeTargetMinutes() * 60L * 80L) {
+                add(DailyLimitType.TIME)
+            }
+        }
+    }
+
+    @Synchronized
+    fun claimDailyLimitPrompts(
+        limits: Set<DailyLimitType>,
+        today: LocalDate = LocalDate.now()
+    ): Set<DailyLimitType> {
+        val date = today.toString()
+        val newlyReached = limits.filterTo(mutableSetOf()) { limit ->
+            preferences.getString(dailyLimitPromptKey(limit), null) != date
+        }
+        if (newlyReached.isNotEmpty()) {
+            val saved = preferences.edit().also { editor ->
+                newlyReached.forEach { limit -> editor.putString(dailyLimitPromptKey(limit), date) }
+            }.commit()
+            check(saved) { "Could not save the daily limit reminder state" }
+        }
+        return newlyReached
+    }
+
     fun setDailyGoals(scrollTarget: Int, timeTargetMinutes: Int) {
         require(scrollTarget in TrackingTimerSettings.MIN_DAILY_SCROLL_TARGET..
             TrackingTimerSettings.MAX_DAILY_SCROLL_TARGET) {
@@ -241,6 +285,32 @@ class TrackingRepository(context: Context) {
     fun bestDailyGoalStreak(today: LocalDate = LocalDate.now()): Int {
         finalizeGoalDays(today)
         return preferences.getInt(KEY_BEST_GOAL_STREAK, 0)
+    }
+
+    fun morningRecap(today: LocalDate = LocalDate.now()): MorningRecap {
+        val yesterday = today.minusDays(1)
+        val metrics = database.dailyRollup(yesterday.toString())
+        val previousDayMetrics = database.dailyRollup(yesterday.minusDays(1).toString())
+        val metGoals = metrics.visits > 0 &&
+            metrics.scrollCount < dailyScrollTarget() &&
+            metrics.activeSeconds < dailyTimeTargetMinutes() * 60L
+        return MorningRecap(
+            date = yesterday,
+            metrics = metrics,
+            previousDayMetrics = previousDayMetrics,
+            streak = dailyGoalStreak(today),
+            bestStreak = bestDailyGoalStreak(today),
+            metGoals = metGoals
+        )
+    }
+
+    fun shouldShowMorningRecap(today: LocalDate = LocalDate.now()): Boolean =
+        preferences.getString(KEY_LAST_MORNING_RECAP_DATE, null) != today.toString()
+
+    fun markMorningRecapSeen(today: LocalDate = LocalDate.now()) {
+        preferences.edit()
+            .putString(KEY_LAST_MORNING_RECAP_DATE, today.toString())
+            .apply()
     }
 
     private fun finalizeGoalDays(today: LocalDate) {
@@ -465,6 +535,9 @@ class TrackingRepository(context: Context) {
 
     private fun scrollKey(platform: FeedPlatform) = "${KEY_SCROLLS}_${platform.name.lowercase(Locale.US)}"
 
+    private fun dailyLimitPromptKey(limit: DailyLimitType) =
+        "daily_limit_prompt_${limit.name.lowercase(Locale.US)}"
+
     private fun contextDisplayMetrics(context: Context): Pair<Float, Float> {
         val metrics = context.resources.displayMetrics
         return metrics.heightPixels.toFloat() to metrics.ydpi
@@ -491,6 +564,7 @@ class TrackingRepository(context: Context) {
         const val KEY_GOAL_LAST_EVALUATED_DATE = "goal_last_evaluated_date"
         const val KEY_GOAL_SUCCESS_DATES = "goal_success_dates"
         const val KEY_BEST_GOAL_STREAK = "best_goal_streak"
+        const val KEY_LAST_MORNING_RECAP_DATE = "last_morning_recap_date"
     }
 }
 

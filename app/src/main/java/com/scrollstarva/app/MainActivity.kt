@@ -4,12 +4,14 @@ import android.content.Intent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.app.AlertDialog
+import android.app.Dialog
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.animation.ValueAnimator
@@ -20,6 +22,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
@@ -76,6 +79,7 @@ class MainActivity : android.app.Activity() {
     private var buddyMessageIndex = 0
     private var selectedAccent = CORAL
     private var activityResumed = false
+    private var morningRecapDialog: Dialog? = null
     private var onboardingTourStep = ONBOARDING_SETTINGS_STEP
     private var onboardingFocusMinutes =
         (TrackingTimerSettings.FOCUS_SESSION_MILLIS / 60_000L).toInt()
@@ -265,6 +269,7 @@ class MainActivity : android.app.Activity() {
             refresh()
         }
         startDiagnosticRefresh()
+        showMorningRecapIfNeeded()
     }
 
     private fun showTrackingSetupScreen() {
@@ -505,6 +510,268 @@ class MainActivity : android.app.Activity() {
         renderTab()
     }
 
+    private fun showMorningRecapIfNeeded() {
+        if (morningRecapDialog?.isShowing == true || !repository.shouldShowMorningRecap()) return
+        val recap = repository.morningRecap()
+        val recapDay = recap.date.plusDays(1)
+        val dialog = Dialog(this)
+        morningRecapDialog = dialog
+        dialog.setContentView(buildMorningRecap(recap, dialog))
+        dialog.setOnDismissListener {
+            repository.markMorningRecapSeen(recapDay)
+            morningRecapDialog = null
+        }
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(CREAM))
+            setLayout(
+                android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                android.view.WindowManager.LayoutParams.MATCH_PARENT
+            )
+            statusBarColor = CREAM
+            navigationBarColor = CREAM
+            decorView.systemUiVisibility =
+                decorView.systemUiVisibility or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        }
+    }
+
+    private fun buildMorningRecap(recap: MorningRecap, dialog: Dialog): View {
+        val root = FrameLayout(this).apply { setBackgroundColor(CREAM) }
+        val scrollView = ScrollView(this).apply {
+            clipToPadding = false
+            setPadding(0, 0, 0, dp(184))
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(24), dp(20), dp(12))
+        }
+        scrollView.addView(content)
+        root.addView(scrollView, FrameLayout.LayoutParams(-1, -1))
+
+        content.addView(label("YESTERDAY · ${detailDate(recap.date).uppercase(Locale.getDefault())}", CORAL_DARK, 12f))
+        content.addView(TextView(this).apply {
+            text = "A little look back"
+            textSize = 28f
+            setTextColor(INK)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(6), 0, dp(12))
+        })
+        val greeting = morningGreeting(recap)
+        content.addView(card {
+            addView(TextView(this@MainActivity).apply {
+                text = "Pip: “$greeting”"
+                textSize = 17f
+                setTextColor(INK)
+            })
+        })
+
+        val focusCards = mutableListOf<View>()
+        val streakCard = card {
+            addView(label("YOUR BURNING STREAK", CORAL_DARK, 12f))
+            addView(GoalFlameView(this@MainActivity, recap.metGoals),
+                LinearLayout.LayoutParams(-1, dp(112)))
+            addView(metric(
+                "🔥 ${recap.streak} ${if (recap.streak == 1) "day" else "days"}",
+                28f
+            ))
+            addView(label(
+                if (recap.metGoals) {
+                    "You met both goals yesterday. Your flame is still burning."
+                } else {
+                    "Yesterday was a reset, not a verdict. Your best is ${recap.bestStreak} " +
+                        if (recap.bestStreak == 1) "day." else "days."
+                },
+                MUTED,
+                14f
+            ).apply { setPadding(0, dp(4), 0, 0) })
+        }.apply { setPadding(dp(18), dp(18), dp(76), dp(18)) }
+        content.addView(streakCard)
+        focusCards += streakCard
+
+        val usageCard = card {
+            addView(label("TIME & SCROLLS", CORAL_DARK, 12f))
+            addView(metricRow(
+                "Supported-app time",
+                formatDuration(recap.metrics.activeSeconds),
+                "Scrolls",
+                recap.metrics.scrollCount.toString()
+            ))
+            addView(metricRow("Sessions", recap.metrics.visits.toString(), null, null).apply {
+                setPadding(0, dp(10), 0, 0)
+            })
+            addView(label(usageInsight(recap), MUTED, 14f).apply {
+                setPadding(0, dp(8), 0, 0)
+            })
+        }.apply { setPadding(dp(18), dp(18), dp(76), dp(18)) }
+        content.addView(usageCard)
+        focusCards += usageCard
+
+        val habitCard = card {
+            addView(label("YOUR MINDFUL PATTERN", CORAL_DARK, 12f))
+            addView(metric(
+                "${recap.metrics.htiScore.toInt()} / 100",
+                27f
+            ))
+            addView(metricRow(
+                "Quick checks",
+                recap.metrics.microChecks.toString(),
+                "Quick returns",
+                recap.metrics.rapidReentries.toString()
+            ))
+            addView(metricRow(
+                "Long sessions",
+                formatDuration(recap.metrics.marathonSeconds),
+                "Fast-scroll time",
+                formatDuration(recap.metrics.agitationSeconds)
+            ).apply { setPadding(0, dp(10), 0, 0) })
+        }.apply { setPadding(dp(18), dp(18), dp(76), dp(18)) }
+        content.addView(habitCard)
+        focusCards += habitCard
+
+        val nextStepCard = card {
+            addView(label("ONE GENTLE THOUGHT FOR TODAY", CORAL_DARK, 12f))
+            addView(TextView(this@MainActivity).apply {
+                text = recapSuggestion(recap)
+                textSize = 16f
+                setTextColor(INK)
+                setPadding(0, dp(8), 0, 0)
+            })
+        }.apply { setPadding(dp(18), dp(18), dp(76), dp(18)) }
+        content.addView(nextStepCard)
+        focusCards += nextStepCard
+
+        val buddyNote = TextView(this).apply {
+            textSize = 14f
+            setTextColor(INK)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = roundedBackground(Color.WHITE, dp(14).toFloat())
+            elevation = dp(4).toFloat()
+        }
+        val continueButton = actionButton("Let’s make today count") { dialog.dismiss() }
+        val footer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(12))
+            setBackgroundColor(CREAM)
+            addView(buddyNote)
+            addView(continueButton, LinearLayout.LayoutParams(-1, -2).apply {
+                topMargin = dp(8)
+            })
+        }
+        root.addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+
+        val floatingBuddy = FloatingBuddyView().apply {
+            contentDescription = "Pip moves to the section being discussed"
+            isClickable = false
+            isFocusable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        root.addView(floatingBuddy, FrameLayout.LayoutParams(dp(54), dp(54), Gravity.TOP or Gravity.END).apply {
+            marginEnd = dp(28)
+        })
+        var currentFocus = -1
+        fun updateFocus() {
+            if (focusCards.isEmpty() || root.height == 0) return
+            val marker = scrollView.scrollY + (scrollView.height * .4f).toInt()
+            val index = focusCards.indices.minByOrNull { section ->
+                val view = focusCards[section]
+                when {
+                    marker < view.top -> view.top - marker
+                    marker > view.bottom -> marker - view.bottom
+                    else -> 0
+                }
+            } ?: return
+            if (index != currentFocus) {
+                currentFocus = index
+                focusCards.forEachIndexed { cardIndex, view ->
+                    view.background = roundedBackground(
+                        if (cardIndex == index) Color.parseColor("#FFF2CB") else Color.WHITE,
+                        dp(18).toFloat()
+                    )
+                }
+                buddyNote.text = recapBuddyMessage(recap, index)
+                floatingBuddy.playCheer()
+            }
+            val section = focusCards[index]
+            val targetY = (scrollView.top + section.top - scrollView.scrollY + dp(8))
+                .coerceIn(dp(8), (root.height - footer.height - dp(62)).coerceAtLeast(dp(8)))
+            floatingBuddy.animate()
+                .translationY(targetY.toFloat())
+                .setDuration(320)
+                .setInterpolator(OvershootInterpolator())
+                .start()
+        }
+        scrollView.setOnScrollChangeListener { _, _, _, _, _ -> updateFocus() }
+        root.post { updateFocus() }
+        return root
+    }
+
+    private fun morningGreeting(recap: MorningRecap): String {
+        val messages = if (recap.metGoals) {
+            listOf(
+                "Great work looking after your attention yesterday. Your ${recap.streak}-day streak is glowing—let’s make today count too.",
+                "You showed up for yourself yesterday. Let’s bring that same care into today; I’m right here with you.",
+                "Yesterday’s effort matters, and so does starting fresh today. We’ll take it one moment at a time.",
+                "You made space for what matters yesterday. Let’s keep that gentle momentum going today.",
+                "Your choices yesterday added up. Whatever today brings, we can meet it together.",
+                "That was a thoughtful day yesterday. Let’s carry one small win into this one.",
+                "You’re building something steady, one day at a time. I’m here for today too."
+            )
+        } else {
+            listOf(
+                "Sometimes we lose our rhythm. That doesn’t erase your progress—today is a fresh start, and I’m with you.",
+                "Yesterday was one day, not your whole story. Let’s make today count together, one small choice at a time.",
+                "No guilt, just a new day. We can find our rhythm again together.",
+                "A tough day can happen to anyone. Let’s start again gently—I’m right here.",
+                "Yesterday doesn’t define you. One pause today can be a kind new beginning.",
+                "You haven’t lost your progress. Let’s focus on the next small choice, together.",
+                "Today is another chance to care for your attention. We’ll take it step by step."
+            )
+        }
+        return messages[(recap.date.toEpochDay() % messages.size).toInt()]
+    }
+
+    private fun usageInsight(recap: MorningRecap): String {
+        val yesterday = recap.metrics.activeSeconds
+        val previous = recap.previousDayMetrics.activeSeconds
+        if (recap.metrics.visits == 0) {
+            return "No supported-app sessions were recorded yesterday. Quiet days count too."
+        }
+        if (recap.previousDayMetrics.visits == 0) {
+            return "This is a useful starting point. A few more days will make your personal pattern clearer."
+        }
+        val difference = kotlin.math.abs(yesterday - previous)
+        return when {
+            yesterday < previous -> "That’s ${formatDuration(difference)} less time than the day before. Notice what helped."
+            yesterday > previous -> "That’s ${formatDuration(difference)} more than the day before. If it felt like a lot, try one small pause today."
+            else -> "Your time was about the same as the day before. Keep noticing what feels intentional."
+        }
+    }
+
+    private fun recapSuggestion(recap: MorningRecap): String = when {
+        recap.metGoals -> "You kept both intentions yesterday. Pick one small thing you want your attention for today, and protect a little space for it."
+        recap.metrics.visits == 0 -> "Choose one moment today to check in with yourself before opening a feed. There’s no need to make up for yesterday."
+        recap.metrics.marathonSeconds > 0 ->
+            "A short break between sessions can help you reset. Try deciding what you want to do before you open a feed."
+        recap.metrics.rapidReentries > 0 || recap.metrics.microChecks > 0 ->
+            "When you notice an automatic check, take one breath and ask what you came to do. Even one pause is progress."
+        else -> "Keep your day gentle: choose one intentional pause and give your attention to something that matters to you."
+    }
+
+    private fun recapBuddyMessage(recap: MorningRecap, section: Int): String = when (section) {
+        0 -> if (recap.metGoals) {
+            "Both goals met yesterday—your streak keeps burning."
+        } else {
+            "Your streak can start again with today's small choices."
+        }
+        1 -> usageInsight(recap)
+        2 -> if (recap.metrics.visits > 0) {
+            "This score is a guide to your pattern, not a grade."
+        } else {
+            "Your pattern will become clearer as tracking gathers days."
+        }
+        else -> recapSuggestion(recap)
+    }
+
     private fun showFocusScreen(focusSession: FocusSession) {
         focusMode = true
         diagnosticHandler.removeCallbacks(diagnosticRefresh)
@@ -578,6 +845,7 @@ class MainActivity : android.app.Activity() {
         snapshot = repository.snapshot()
         setContentView(buildScreen())
         refresh()
+        showMorningRecapIfNeeded()
     }
 
     private fun formatFocusCountdown(focusSession: FocusSession): String {

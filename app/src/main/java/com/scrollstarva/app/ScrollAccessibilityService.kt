@@ -1,7 +1,12 @@
 package com.scrollstarva.app
 
 import android.accessibilityservice.AccessibilityService
+import android.animation.ValueAnimator
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.graphics.PixelFormat
 import android.os.Build
@@ -39,6 +44,9 @@ class ScrollAccessibilityService : AccessibilityService() {
     private var lastScrollAt = 0L
     private var lastLegacyScrollPosition: LegacyScrollPosition? = null
     private var marathonReminderShown = false
+    private var lastMarathonNarration: String? = null
+    private var lastLimitNarration: String? = null
+    private var lastFocusNarration: String? = null
     private var interventionView: android.view.View? = null
     private val delayedStop = Runnable { stopTracking() }
     private val repeatMarathonReminderRunnable = Runnable {
@@ -174,6 +182,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                 trackingActivityId?.let(repository::recordSessionScroll)
                 sessionScrollCount++
                 lastScrollAt = now
+                maybeShowDailyLimitPrompt()
                 AccessibilityDiagnostics.record(
                     "Scroll decision: COUNTED\n" +
                         "Package: $packageName\n" +
@@ -287,6 +296,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         )
         lastCheckpointElapsed = nowElapsed
 
+        maybeShowDailyLimitPrompt()
         maybeShowMarathonReminder(nowElapsed)
 
         if (LocalDate.now() != LocalDate.ofInstant(
@@ -331,7 +341,10 @@ class ScrollAccessibilityService : AccessibilityService() {
             trackingPackage == null ||
             repository.repeatBreakReminderAtMillis() > 0L ||
             marathonReminderShown ||
-            repository.areBreakRemindersMuted()
+            repository.areBreakRemindersMuted() ||
+            repository.activeFocusSession() != null ||
+            interventionView != null ||
+            !isTrackedAppForeground()
         ) {
             return
         }
@@ -370,7 +383,71 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun showMarathonReminder() {
-        showBreakPrompt(maxOf(0L, SystemClock.elapsedRealtime() - trackingStartedAtElapsed))
+        val interval = marathonReminderIntervalLabel()
+        val narration = nextNarration(
+            listOf(
+                "Hey buddy, I said I’d check in after $interval. Want to claim a little space for the rest of your day?",
+                "I promised to pop by after $interval—here I am, cheering you on. Shall we give your attention a break?",
+                "Your $interval reminder is here! You’ve got this; let’s choose what you want the next part of today to feel like.",
+                "As promised, I’m checking in after $interval. Ready to pause the scroll and make room for something you love?",
+                "We set this little check-in for $interval, and I’m glad you’re here. How about a reset before the next chapter?"
+            ),
+            lastMarathonNarration
+        ).also { lastMarathonNarration = it }
+        val elapsedMinutes = maxOf(0L, SystemClock.elapsedRealtime() - trackingStartedAtElapsed) / 60_000L
+        showBreakPrompt(
+            title = "A little pause, buddy?",
+            narration = narration,
+            message = "You’ve been using ${trackingAppLabel ?: "this app"} for $elapsedMinutes minutes. A short pause can help you come back with a clearer mind."
+        )
+    }
+
+    private fun maybeShowDailyLimitPrompt() {
+        if (trackingActivityId == null ||
+            interventionView != null ||
+            repository.activeFocusSession() != null ||
+            repository.areBreakRemindersMuted() ||
+            !isTrackedAppForeground()
+        ) {
+            return
+        }
+        val limits = repository.claimDailyLimitPrompts(repository.dailyLimitsAtEightyPercent())
+        if (limits.isEmpty()) return
+
+        val metrics = checkNotNull(repository.snapshot().dailyHistory.lastOrNull()) {
+            "Today's daily summary is unavailable"
+        }
+        val narration = nextNarration(
+            listOf(
+                "You’ve made it a good way toward today’s intention. Want to save a little room for something else you care about?",
+                "A quick Pip check-in: your daily goal is getting close. Let’s take a gentle pause and keep some attention in reserve.",
+                "Look at you showing up! You’re nearing one of today’s limits—how about a tiny reset before carrying on?",
+                "You’ve used a big part of today’s allowance. Let’s make the next choice a thoughtful one; I’m cheering for you.",
+                "Your progress is looking lively! You’re close to your daily mark, so let’s pause and decide what matters next."
+            ),
+            lastLimitNarration
+        ).also { lastLimitNarration = it }
+        val details = limits.map { limit ->
+            when (limit) {
+                DailyLimitType.SCROLLS -> {
+                    val target = repository.dailyScrollTarget()
+                    val used = metrics.scrollCount
+                    val percent = (used * 100L / target).coerceAtLeast(80L)
+                    "scroll goal ($used of $target, $percent%)"
+                }
+                DailyLimitType.TIME -> {
+                    val targetMinutes = repository.dailyTimeTargetMinutes()
+                    val usedSeconds = metrics.activeSeconds
+                    val percent = (usedSeconds * 100 / (targetMinutes * 60L)).coerceAtLeast(80)
+                    "time goal (${formatUsageDuration(usedSeconds)} of $targetMinutes minutes, $percent%)"
+                }
+            }
+        }
+        showBreakPrompt(
+            title = "A little room for today",
+            narration = narration,
+            message = "You’ve reached 80% or more of your daily ${details.joinToString(" and ")}. A short pause can help you choose how you’d like to spend the rest of today."
+        )
     }
 
     private fun showFocusInterruptionPrompt() {
@@ -388,6 +465,15 @@ class ScrollAccessibilityService : AccessibilityService() {
         var selectedBreakMinutes = repository.focusBreakMinutes()
         showPromptCard(
             title = "Your focus time isn’t finished",
+            narration = nextNarration(
+                listOf(
+                    "A gentle nudge, buddy—your focus time is still here whenever you’re ready to come back.",
+                    "Pip’s here with a smile. Want to take a short scroll break, or return to the thing you chose to focus on?",
+                    "You made a promise to yourself to focus. No pressure—choose whether to pause or pick it back up.",
+                    "A little detour is okay. I’m cheering you on whenever you’re ready to return to your focus."
+                ),
+                lastFocusNarration
+            ).also { lastFocusNarration = it },
             message = "You still have ${formatMinutes(remainingMillis)} of focus time. Choose what feels right.",
             quote = focusSession.quote,
             extraContent = { prompt ->
@@ -426,22 +512,17 @@ class ScrollAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun showBreakPrompt(elapsedMillis: Long) {
-        val minutes = elapsedMillis / 60_000L
-        val appLabel = trackingAppLabel ?: "this app"
+    private fun showBreakPrompt(title: String, narration: String, message: String) {
         val durationPicker = FocusDurationPicker(
             this,
             repository.defaultFocusMinutes() * 60_000L
         )
         val snoozeOptions = TrackingTimerSettings.BREAK_REMINDER_SNOOZE_OPTIONS_MILLIS
         var selectedSnoozeIndex = 0
-        val goalWarning = dailyGoalRiskMessage()
         showPromptCard(
-            title = if (goalWarning == null) "A gentle pause" else "Protect your streak",
-            message = buildString {
-                append("You’ve been using $appLabel for $minutes minutes. A short break can help you return with a clearer mind.")
-                if (goalWarning != null) append("\n\n").append(goalWarning)
-            },
+            title = title,
+            narration = narration,
+            message = message,
             quote = FocusSessionQuotes.random(),
             extraContent = { prompt ->
                 prompt.addView(TextView(this).apply {
@@ -493,21 +574,12 @@ class ScrollAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun dailyGoalRiskMessage(): String? {
-        val today = repository.snapshot().dailyHistory.lastOrNull() ?: return null
-        val scrollTarget = repository.dailyScrollTarget()
-        val timeTargetSeconds = repository.dailyTimeTargetMinutes() * 60L
-        val scrollsNearLimit = today.scrollCount * 100L >= scrollTarget * 80L
-        val timeNearLimit = today.activeSeconds * 100L >= timeTargetSeconds * 80L
-        if (!scrollsNearLimit && !timeNearLimit) return null
+    private fun nextNarration(options: List<String>, previous: String?): String =
+        options.filterNot { it == previous }.random()
 
-        val goalsAtRisk = buildList {
-            if (scrollsNearLimit) add("scroll")
-            if (timeNearLimit) add("feed-time")
-        }.joinToString(" and ")
-        return "You’re nearing your daily $goalsAtRisk goal. Reaching either limit can end your streak, " +
-            "so a break now can help you stay within your targets."
-    }
+    private fun isTrackedAppForeground(): Boolean =
+        trackingPackage != null &&
+            rootInActiveWindow?.packageName?.toString() == trackingPackage
 
     private fun snoozeDescription(durationMillis: Long): String =
         "Don’t bother me for the next ${snoozeWheelLabel(durationMillis)}."
@@ -529,6 +601,7 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     private fun showPromptCard(
         title: String,
+        narration: String,
         message: String,
         quote: String,
         extraContent: ((LinearLayout) -> Unit)?,
@@ -550,6 +623,22 @@ class ScrollAccessibilityService : AccessibilityService() {
             textSize = 20f
             setTextColor(Color.parseColor("#17202A"))
             setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, dp(4))
+            addView(BuddyCelebrationView(), LinearLayout.LayoutParams(dp(72), dp(68)))
+            addView(TextView(this@ScrollAccessibilityService).apply {
+                text = "Pip: “$narration”"
+                textSize = 15f
+                setTextColor(Color.parseColor("#34434D"))
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#FFF0C9"))
+                    cornerRadius = dp(16).toFloat()
+                }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
         })
         root.addView(TextView(this).apply {
             text = message
@@ -584,6 +673,109 @@ class ScrollAccessibilityService : AccessibilityService() {
         }
         windowManager.addView(root, params)
         interventionView = root
+    }
+
+    private inner class BuddyCelebrationView : View(this@ScrollAccessibilityService) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var phase = 0f
+        private val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 1_000L
+            repeatCount = ValueAnimator.INFINITE
+            addUpdateListener {
+                phase = it.animatedValue as Float
+                invalidate()
+            }
+        }
+
+        init {
+            contentDescription = "Pip smiles, jumps with excitement, and sends out ripples"
+        }
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            animator.start()
+        }
+
+        override fun onDetachedFromWindow() {
+            animator.cancel()
+            super.onDetachedFromWindow()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val scale = minOf(width / dp(72).toFloat(), height / dp(68).toFloat())
+            if (scale <= 0f) return
+            canvas.save()
+            canvas.scale(scale, scale)
+
+            val centerX = dp(36).toFloat()
+            val floorY = dp(59).toFloat()
+            val jump = if (phase < .42f) {
+                kotlin.math.sin(phase / .42f * Math.PI).toFloat() * dp(7)
+            } else {
+                0f
+            }
+            val ripplePhase = ((phase - .42f) / .58f).coerceIn(0f, 1f)
+            if (phase >= .42f) {
+                for (offset in listOf(0f, .35f)) {
+                    val progress = (ripplePhase + offset).coerceAtMost(1f)
+                    paint.color = Color.argb(
+                        ((1f - progress) * 150f).toInt(),
+                        44,
+                        154,
+                        145
+                    )
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = dp(1.5f)
+                    canvas.drawOval(
+                        RectF(
+                            centerX - dp(7) - dp(18) * progress,
+                            floorY - dp(3) - dp(5) * progress,
+                            centerX + dp(7) + dp(18) * progress,
+                            floorY + dp(3) + dp(5) * progress
+                        ),
+                        paint
+                    )
+                }
+            }
+
+            val headY = floorY - dp(27) - jump
+            paint.style = Paint.Style.FILL
+            paint.color = Color.parseColor("#2C9A91")
+            canvas.drawRoundRect(
+                RectF(centerX - dp(19), headY - dp(19), centerX + dp(19), headY + dp(17)),
+                dp(13).toFloat(),
+                dp(13).toFloat(),
+                paint
+            )
+            paint.color = Color.parseColor("#F5C451")
+            val sprout = Path().apply {
+                moveTo(centerX, headY - dp(17))
+                cubicTo(centerX - dp(2), headY - dp(22), centerX + dp(7), headY - dp(24),
+                    centerX + dp(12), headY - dp(22))
+                cubicTo(centerX + dp(11), headY - dp(19), centerX + dp(6), headY - dp(16),
+                    centerX, headY - dp(17))
+                close()
+            }
+            canvas.drawPath(sprout, paint)
+            paint.color = Color.parseColor("#17202A")
+            canvas.drawCircle(centerX - dp(7), headY - dp(3), dp(1.5f), paint)
+            canvas.drawCircle(centerX + dp(7), headY - dp(3), dp(1.5f), paint)
+            paint.color = Color.parseColor("#F3A49A")
+            canvas.drawCircle(centerX - dp(12), headY + dp(3), dp(2f), paint)
+            canvas.drawCircle(centerX + dp(12), headY + dp(3), dp(2f), paint)
+            paint.color = Color.parseColor("#17202A")
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = dp(1.5f)
+            canvas.drawArc(
+                RectF(centerX - dp(8), headY - dp(1), centerX + dp(8), headY + dp(10)),
+                15f,
+                150f,
+                false,
+                paint
+            )
+            canvas.restore()
+        }
     }
 
     private fun addPromptSelector(parent: LinearLayout, selector: View, height: Int? = null) {
@@ -648,10 +840,13 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun returnToFocusScreen() {
-        performGlobalAction(GLOBAL_ACTION_HOME)
         startActivity(
             Intent(this, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
         )
     }
 
@@ -664,9 +859,21 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private fun dp(value: Float): Float = value * resources.displayMetrics.density
+
     private fun formatMinutes(millis: Long): String {
         val minutes = (millis + 59_999L) / 60_000L
         return "$minutes ${if (minutes == 1L) "minute" else "minutes"}"
+    }
+
+    private fun formatUsageDuration(seconds: Long): String {
+        val minutes = seconds / 60L
+        val remainingSeconds = seconds % 60L
+        return if (remainingSeconds == 0L) {
+            "$minutes min"
+        } else {
+            "$minutes min ${remainingSeconds}s"
+        }
     }
 
     private fun isVerticalScroll(event: AccessibilityEvent): Boolean {

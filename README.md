@@ -2,7 +2,7 @@
 
 Scroll Starva is an Android app that estimates how far a user has scrolled on short-form feeds (TikTok, YouTube Shorts, Instagram Reels, and Facebook Reels) and tracks time spent in those feeds.
 
-The dashboard separates a daily check-in, feed-time trends, scroll activity, and habit progress into tabs. Local charts show up to 15 days of activity, with supportive summaries that compare tracked weeks once enough history is available. The interface also includes an original animated progress buddy, tab-specific accent colors, animated page transitions, and tappable charts.
+The dashboard separates a daily check-in, feed-time trends, scroll activity, and habit progress into tabs. On the first app open each day, a scrollable recap reviews yesterday’s streak, time, scrolls, and habit patterns; Pip follows each section with a gentle, data-based note. While a tracked app is active, Pip also offers a cheerful, animated check-in when a daily scroll or time goal reaches 80%, alongside the configurable marathon reminder. Local charts show up to 15 days of activity, with supportive summaries that compare tracked weeks once enough history is available. The interface also includes an original animated progress buddy, tab-specific accent colors, animated page transitions, and tappable charts.
 
 The **Debug** tab shows recent accessibility events from supported apps, the event source and active-window labels, feed-detection decisions, scroll deltas, and whether each scroll was counted or ignored. The on-device log keeps up to 120 recent entries in memory; visible feed text can appear in the log. Use **Copy log** only when you intend to share those details.
 
