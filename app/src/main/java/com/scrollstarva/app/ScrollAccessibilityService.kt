@@ -22,6 +22,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.NumberPicker
+import android.widget.ScrollView
 import android.widget.TextView
 import java.time.LocalDate
 import java.time.ZoneId
@@ -608,7 +609,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         actions: List<Pair<String, () -> Unit>>
     ) {
         removeIntervention()
-        val root = LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(18), dp(20), dp(16))
             background = GradientDrawable().apply {
@@ -618,13 +619,13 @@ class ScrollAccessibilityService : AccessibilityService() {
             }
             elevation = dp(12).toFloat()
         }
-        root.addView(TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = title
             textSize = 20f
             setTextColor(Color.parseColor("#17202A"))
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
-        root.addView(LinearLayout(this).apply {
+        content.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(4))
@@ -640,25 +641,41 @@ class ScrollAccessibilityService : AccessibilityService() {
                 }
             }, LinearLayout.LayoutParams(0, -2, 1f))
         })
-        root.addView(TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = message
             textSize = 15f
             setTextColor(Color.parseColor("#65727E"))
             setPadding(0, dp(8), 0, dp(6))
         })
-        root.addView(TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = "“$quote”"
             textSize = 14f
             setTextColor(Color.parseColor("#C94D43"))
             setPadding(0, dp(2), 0, dp(12))
         })
-        extraContent?.invoke(root)
+        extraContent?.invoke(content)
         actions.forEachIndexed { index, (actionText, action) ->
-            addPromptAction(root, actionText, primary = index == 0, action = action)
+            addPromptAction(content, actionText, primary = index == 0, action = action)
         }
 
+        val maxPromptHeight = (resources.displayMetrics.heightPixels * .82f).toInt()
+            .coerceAtLeast(dp(320))
+        val root = object : ScrollView(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val cappedHeight = View.MeasureSpec.makeMeasureSpec(
+                    maxPromptHeight,
+                    View.MeasureSpec.AT_MOST
+                )
+                super.onMeasure(widthMeasureSpec, cappedHeight)
+            }
+        }.apply {
+            isFillViewport = false
+            clipToPadding = false
+            setPadding(0, dp(8), 0, dp(8))
+            addView(content, android.view.ViewGroup.LayoutParams(-1, -2))
+        }
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.widthPixels - dp(32)).coerceAtLeast(dp(280)),
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -667,8 +684,7 @@ class ScrollAccessibilityService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            val margin = dp(16)
-            x = margin
+            x = 0
             y = dp(24)
         }
         windowManager.addView(root, params)
@@ -806,7 +822,8 @@ class ScrollAccessibilityService : AccessibilityService() {
             maxLines = 2
             minWidth = 0
             minimumWidth = 0
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            minHeight = dp(48)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
             isAllCaps = false
             setTextColor(if (primary) Color.WHITE else Color.parseColor("#17202A"))
             background = GradientDrawable().apply {
@@ -824,8 +841,8 @@ class ScrollAccessibilityService : AccessibilityService() {
             addView(button, LinearLayout.LayoutParams(buttonWidth, -2))
         }
         parent.addView(actionRow, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(8)
-            bottomMargin = dp(8)
+            topMargin = dp(4)
+            bottomMargin = dp(4)
         })
     }
 
