@@ -44,8 +44,7 @@ private enum class DashboardTab(val title: String, val heading: String, val subt
     OVERVIEW("Home", "Your mindful day", "Small choices can build a steadier relationship with your attention."),
     TIME("Time", "Time in supported apps", "Notice your time patterns without judging yourself."),
     SCROLLS("Scrolls", "Your scrolling activity", "Every pause and choice is part of your progress."),
-    PROGRESS("Progress", "Your progress", "Progress is personal. Small steps still count."),
-    DEBUG("Debug", "Tracking diagnostics", "See exactly what Android sends to the tracker.")
+    PROGRESS("Progress", "Your progress", "Progress is personal. Small steps still count.")
 }
 
 private enum class ChartStyle { BARS, LINE }
@@ -95,13 +94,11 @@ class MainActivity : android.app.Activity() {
         "Scrolls: see your activity" to
             "Review scroll totals, recent sessions, and which supported apps contribute to your daily activity.",
         "Progress: set intentions" to
-            "Adjust your break reminder, choose a custom focus duration, and start focus whenever you need it.",
-        "Debug: check tracking" to
-            "See what Android accessibility events reach Scroll Starva. Your activity and diagnostics stay on this device."
+            "Adjust your break reminder, choose a custom focus duration, and start focus whenever you need it."
     )
     private val diagnosticRefresh = object : Runnable {
         override fun run() {
-            if (selectedTab == DashboardTab.DEBUG && ::diagnosticLogView.isInitialized) {
+            if (::diagnosticLogView.isInitialized) {
                 updateDiagnosticLog()
                 diagnosticHandler.postDelayed(this, DIAGNOSTIC_REFRESH_MILLIS)
             }
@@ -910,24 +907,20 @@ class MainActivity : android.app.Activity() {
             DashboardTab.TIME -> buildTimeTab()
             DashboardTab.SCROLLS -> buildScrollsTab()
             DashboardTab.PROGRESS -> buildProgressTab()
-            DashboardTab.DEBUG -> buildDebugTab()
         }
         selectedAccent = when (tab) {
             DashboardTab.OVERVIEW -> CORAL
             DashboardTab.TIME -> TEAL
             DashboardTab.SCROLLS -> PURPLE
             DashboardTab.PROGRESS -> GREEN
-            DashboardTab.DEBUG -> INK
         }
         dashboardRoot.setBackgroundColor(when (tab) {
             DashboardTab.OVERVIEW -> CREAM
             DashboardTab.TIME -> Color.parseColor("#F0FAF8")
             DashboardTab.SCROLLS -> Color.parseColor("#F6F3FC")
             DashboardTab.PROGRESS -> Color.parseColor("#F1F8F2")
-            DashboardTab.DEBUG -> Color.parseColor("#F0F2F5")
         })
         diagnosticHandler.removeCallbacks(diagnosticRefresh)
-        if (tab == DashboardTab.DEBUG) startDiagnosticRefresh()
         pageScroll.scrollTo(0, 0)
         updateNavigation()
         animatePageIn()
@@ -1145,6 +1138,10 @@ class MainActivity : android.app.Activity() {
             addView(metric((today?.scrollCount ?: 0).toString(), 32f))
             addView(label("Estimated thumb travel: ${String.format(Locale.US, "%.3f km", snapshot.distanceKm)}", MUTED, 14f))
         })
+        pageContent.addView(sectionTitle("Scrolls by app today"))
+        pageContent.addView(card {
+            addView(selectedAppInsights())
+        })
         pageContent.addView(sectionTitle("Daily scrolls · last 15 days"))
         pageContent.addView(chartCard(
             points = history.map {
@@ -1155,10 +1152,6 @@ class MainActivity : android.app.Activity() {
         ))
         pageContent.addView(sectionTitle("Recent supported app sessions"))
         pageContent.addView(activityFeedCard(snapshot.activities))
-        pageContent.addView(sectionTitle("Scrolls by app today"))
-        pageContent.addView(card {
-            addView(selectedAppInsights())
-        })
     }
 
     private fun buildProgressTab() {
@@ -1191,14 +1184,24 @@ class MainActivity : android.app.Activity() {
             })
         })
         pageContent.addView(card {
-            addView(label("TODAY'S HABIT TAPER INDEX", CORAL_DARK, 12f))
-            val score = history.lastOrNull()?.htiScore?.let { "${it.toInt()} / 100" } ?: "— / 100"
-            addView(metric(score, 34f))
+            addView(label("TODAY'S HABIT TAPER INDEX (MINDFUL SCORE)", CORAL_DARK, 12f))
+            val currentScoreFloat = history.lastOrNull()?.htiScore
+            val scoreText = currentScoreFloat?.let { "${it.toInt()} / 100" } ?: "— / 100"
+            addView(metric(scoreText, 34f))
+            currentScoreFloat?.let { valScore ->
+                val ratingLabel = when {
+                    valScore >= 80 -> "🌟 Great balance & intentional scrolling"
+                    valScore >= 55 -> "🌱 Steady control with a few long checks"
+                    else -> "💡 Heavy feed loops today—a fresh start awaits"
+                }
+                addView(label(ratingLabel, INK, 14f).apply { setPadding(0, dp(2), 0, dp(6)) })
+            }
             addView(TextView(this@MainActivity).apply {
                 text = progressContext(history)
-                textSize = 15f
-                setTextColor(INK)
-                setPadding(0, dp(8), 0, 0)
+                textSize = 14f
+                setTextColor(MUTED)
+                setLineSpacing(dp(2).toFloat(), 1f)
+                setPadding(0, dp(6), 0, 0)
             })
         })
         pageContent.addView(sectionTitle("Your score trend · last 15 days"))
@@ -1543,9 +1546,6 @@ class MainActivity : android.app.Activity() {
 
     private fun startDiagnosticRefresh() {
         diagnosticHandler.removeCallbacks(diagnosticRefresh)
-        if (activityResumed && selectedTab == DashboardTab.DEBUG) {
-            diagnosticHandler.post(diagnosticRefresh)
-        }
     }
 
     private fun updateDiagnosticLog() {
@@ -2183,9 +2183,9 @@ class MainActivity : android.app.Activity() {
     private fun progressContext(history: List<HabitDay>): String {
         val earlierDays = history.dropLast(1).filter { it.visits > 0 }
         return if (earlierDays.size < 7) {
-            "This is an early estimate while your 7-day baseline grows. It’s a guide, not a grade—your progress takes time to reveal itself."
+            "The Habit Taper Index is your daily 0–100 mindful scrolling score. Higher scores mean taking longer breaks between app opens, avoiding marathon sessions, and scrolling at a calm pace. Because you're in your first week, this is an early estimate while your 7-day baseline grows!"
         } else {
-            "The score combines time, short returns, longer sessions, and estimated fast scrolling. Look for your trend over time rather than judging one day."
+            "Your score measures how intentional your scrolling was today. It increases when you space out your app opens, keep sessions under 20 minutes, and avoid fast compulsive flicking. Focus on your 15-day trend rather than judging any single day."
         }
     }
 
