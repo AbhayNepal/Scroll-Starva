@@ -1,6 +1,7 @@
 package com.scrollstarva.app
 
 import android.content.Intent
+import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.app.AlertDialog
@@ -9,6 +10,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -57,8 +60,102 @@ private data class InstalledTrackedApp(
     val icon: Drawable
 )
 
+private data class OnboardingTourStepData(
+    val tab: DashboardTab,
+    val badge: String,
+    val title: String,
+    val message: String,
+    val nextButtonText: String,
+    val cardIndex: Int
+)
+
+private class SpotlightTourOverlay(
+    context: Context,
+    private val targetView: View?,
+    private val tooltipView: View
+) : FrameLayout(context) {
+    private val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#D0000000")
+    }
+    private val cutoutPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+    }
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FFF8EF")
+        style = Paint.Style.STROKE
+        strokeWidth = 3f * resources.displayMetrics.density
+    }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#E05236")
+        style = Paint.Style.STROKE
+        strokeWidth = 3f * resources.displayMetrics.density
+    }
+
+    init {
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
+        isClickable = true
+        isFocusable = true
+        setOnTouchListener { _, _ -> true }
+        updateTooltipPosition()
+        addView(tooltipView)
+    }
+
+    fun updateTooltipPosition() {
+        val screenHeight = resources.displayMetrics.heightPixels
+        val showAtTop = if (targetView != null && targetView.isAttachedToWindow) {
+            val location = IntArray(2)
+            targetView.getLocationOnScreen(location)
+            val centerY = location[1] + targetView.height / 2
+            centerY > screenHeight / 2
+        } else {
+            false
+        }
+
+        val params = LayoutParams(-1, -2).apply {
+            gravity = if (showAtTop) Gravity.TOP or Gravity.CENTER_HORIZONTAL else Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            val sideMargin = dp(12)
+            val topMargin = if (showAtTop) dp(36) else dp(8)
+            val bottomMargin = if (showAtTop) dp(8) else dp(12)
+            setMargins(sideMargin, topMargin, sideMargin, bottomMargin)
+        }
+        tooltipView.layoutParams = params
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+
+        canvas.drawRect(0f, 0f, w, h, scrimPaint)
+
+        if (targetView != null && targetView.isAttachedToWindow && targetView.visibility == VISIBLE) {
+            val location = IntArray(2)
+            targetView.getLocationOnScreen(location)
+            val overlayLocation = IntArray(2)
+            this.getLocationOnScreen(overlayLocation)
+
+            val padding = 8f * resources.displayMetrics.density
+            val left = (location[0] - overlayLocation[0]).toFloat() - padding
+            val top = (location[1] - overlayLocation[1]).toFloat() - padding
+            val right = left + targetView.width.toFloat() + (padding * 2)
+            val bottom = top + targetView.height.toFloat() + (padding * 2)
+
+            val radius = 16f * resources.displayMetrics.density
+            val targetRect = RectF(left, top, right, bottom)
+
+            canvas.drawRoundRect(targetRect, radius, radius, cutoutPaint)
+            canvas.drawRoundRect(targetRect, radius, radius, borderPaint)
+            canvas.drawRoundRect(targetRect, radius, radius, glowPaint)
+        }
+
+        super.dispatchDraw(canvas)
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+}
+
 class MainActivity : android.app.Activity() {
     private lateinit var repository: TrackingRepository
+    private lateinit var rootFrame: FrameLayout
     private lateinit var dashboardRoot: LinearLayout
     private lateinit var pageContent: LinearLayout
     private lateinit var pageScroll: ScrollView
@@ -86,15 +183,88 @@ class MainActivity : android.app.Activity() {
     private var onboardingSelectedPackages = FeedPlatform.entries.map { it.packageName }.toMutableSet()
     private var onboardingScreen: View? = null
     private var onboardingFocusPicker: FocusDurationPicker? = null
-    private val onboardingTour = listOf(
-        "Home: your daily check-in" to
-            "See your daily goals, mindful score, streak, supported-app time, and scrolls. Pip will celebrate your progress without judgment.",
-        "Time: understand your feed habits" to
-            "Explore your daily time in supported apps and compare recent days to understand how your routine changes.",
-        "Scrolls: see your activity" to
-            "Review scroll totals, recent sessions, and which supported apps contribute to your daily activity.",
-        "Progress: set intentions" to
-            "Adjust your break reminder, choose a custom focus duration, and start focus whenever you need it."
+    private var tourOverlayView: View? = null
+    private val onboardingTourSteps = listOf(
+        OnboardingTourStepData(
+            tab = DashboardTab.OVERVIEW,
+            badge = "STEP 1 OF 10 · HOME TAB",
+            title = "Welcome to Scroll Starva",
+            message = "Pip is here to help you build a calmer relationship with your phone. Your daily flame stays lit as long as you stay within your mindful goals.",
+            nextButtonText = "Next: Daily Limits →",
+            cardIndex = 0
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.OVERVIEW,
+            badge = "STEP 2 OF 10 · HOME TAB",
+            title = "Track Your Daily Limits",
+            message = "Here are your daily scroll and app time targets. As you check supported feeds, these numbers update live so you always know where you stand.",
+            nextButtonText = "Next: Time Tab →",
+            cardIndex = 1
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.TIME,
+            badge = "STEP 3 OF 10 · TIME TAB",
+            title = "Understand Your Time",
+            message = "Welcome to the Time tab! This chart shows your daily screen time in supported apps over the last 15 days, helping you spot patterns without judgment.",
+            nextButtonText = "Next: Scrolls & Thumb Travel →",
+            cardIndex = 2
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.SCROLLS,
+            badge = "STEP 4 OF 10 · SCROLLS TAB",
+            title = "Scrolls & Thumb Travel",
+            message = "On the Scrolls tab, you can view your total scroll flicks for today along with your estimated thumb travel distance in kilometers. Every pause is a win!",
+            nextButtonText = "Next: App Breakdown →",
+            cardIndex = 0
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.SCROLLS,
+            badge = "STEP 5 OF 10 · SCROLLS TAB",
+            title = "Scrolls by App Today",
+            message = "This section breaks down your scrolling activity app by app, showing you exactly which apps consume the most attention during your daily routines.",
+            nextButtonText = "Next: Progress Tab →",
+            cardIndex = 2
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.PROGRESS,
+            badge = "STEP 6 OF 10 · PROGRESS TAB",
+            title = "Customize Tracked Apps",
+            message = "Welcome to Progress! Tap 'Choose apps' here to select which social apps count toward your time, goals, and scroll totals.",
+            nextButtonText = "Next: Daily Goals →",
+            cardIndex = 1
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.PROGRESS,
+            badge = "STEP 7 OF 10 · PROGRESS TAB",
+            title = "Set Daily Goals",
+            message = "Here you can set your target max scrolls and maximum foreground time limits per day to keep your digital routine balanced.",
+            nextButtonText = "Next: Break Reminders →",
+            cardIndex = 3
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.PROGRESS,
+            badge = "STEP 8 OF 10 · PROGRESS TAB",
+            title = "Feed Break Reminders",
+            message = "Set this reminder slider so Pip can gently check in with you during long feed sessions when you've been scrolling continuously.",
+            nextButtonText = "Next: Focus Sessions →",
+            cardIndex = 5
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.PROGRESS,
+            badge = "STEP 9 OF 10 · PROGRESS TAB",
+            title = "Start a Focus Session",
+            message = "When you want to step away from all social feeds, pick a focus duration here and tap Start Focus to give your full attention to what matters.",
+            nextButtonText = "Next: Mindful Score →",
+            cardIndex = 6
+        ),
+        OnboardingTourStepData(
+            tab = DashboardTab.PROGRESS,
+            badge = "STEP 10 OF 10 · PROGRESS TAB",
+            title = "Habit Taper Index (Mindful Score)",
+            message = "This is your Habit Taper Index—your daily 0–100 mindful score. It rewards longer breaks between app opens, fewer marathon sessions, and a calmer scroll pace!",
+            nextButtonText = "Complete Tour 🎉",
+            cardIndex = 7
+        )
     )
     private val diagnosticRefresh = object : Runnable {
         override fun run() {
@@ -170,6 +340,7 @@ class MainActivity : android.app.Activity() {
 
     private fun buildScreen(): View {
         onboardingScreen = null
+        rootFrame = FrameLayout(this)
         dashboardRoot = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(CREAM)
@@ -232,8 +403,9 @@ class MainActivity : android.app.Activity() {
             )
         }
         dashboardRoot.addView(navigationBar)
+        rootFrame.addView(dashboardRoot, FrameLayout.LayoutParams(-1, -1))
         renderTab()
-        return dashboardRoot
+        return rootFrame
     }
 
     private fun renderAppState() {
@@ -450,52 +622,155 @@ class MainActivity : android.app.Activity() {
     }
 
     private fun showOnboardingTourStep() {
-        val (title, message) = onboardingTour[onboardingTourStep]
-        val root = onboardingRoot()
-        root.addView(FloatingBuddyView().apply {
-            contentDescription = "Pip, your friendly onboarding guide. Tap for encouragement."
-            setOnClickListener {
-                playCheer()
-                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
-            }
-        }, LinearLayout.LayoutParams(dp(96), dp(96)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            bottomMargin = dp(16)
-        })
-        root.addView(label("YOUR APP TOUR · ${onboardingTourStep + 1} OF ${onboardingTour.size}", CORAL_DARK, 12f).apply {
-            gravity = Gravity.CENTER
-        })
-        root.addView(TextView(this).apply {
-            text = title
-            textSize = 26f
-            setTextColor(INK)
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(8))
-        })
-        root.addView(TextView(this).apply {
-            text = message
-            textSize = 16f
-            setTextColor(MUTED)
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(24))
-        })
-        root.addView(actionButton(
-            if (onboardingTourStep == onboardingTour.lastIndex) "Finish tour" else "Next"
-        ) {
-            if (onboardingTourStep == onboardingTour.lastIndex) {
-                finishOnboarding()
+        if (onboardingTourStep !in onboardingTourSteps.indices) {
+            finishOnboarding()
+            return
+        }
+        val step = onboardingTourSteps[onboardingTourStep]
+
+        onboardingScreen = null
+        if (!::rootFrame.isInitialized) {
+            setContentView(buildScreen())
+        }
+
+        if (selectedTab != step.tab) {
+            selectedTab = step.tab
+            renderTab()
+        } else {
+            renderTab()
+        }
+
+        // Lock manual user scrolling during tour
+        pageScroll.setOnTouchListener { _, _ -> true }
+
+        val targetView = pageContent.getChildAt(step.cardIndex)
+        pageScroll.postDelayed({
+            if (targetView != null) {
+                val targetTop = (targetView.top - dp(16)).coerceAtLeast(0)
+                pageScroll.smoothScrollTo(0, targetTop)
             } else {
-                onboardingTourStep++
-                showOnboardingTourStep()
+                pageScroll.smoothScrollTo(0, 0)
             }
-        })
-        root.addView(Button(this).apply {
-            text = "Skip tour"
-            isAllCaps = false
-            setOnClickListener { finishOnboarding() }
-        })
-        showOnboardingContent(root)
+            pageScroll.postDelayed({
+                (tourOverlayView as? SpotlightTourOverlay)?.updateTooltipPosition()
+                tourOverlayView?.invalidate()
+            }, 120L)
+        }, 80L)
+
+        tourOverlayView?.let { rootFrame.removeView(it) }
+
+        val tooltipCard = card {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#FFF8EF"))
+            background = roundedBackground(Color.parseColor("#FFF8EF"), dp(14).toFloat())
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+
+            lateinit var miniPip: FloatingBuddyView
+
+            val topRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                miniPip = FloatingBuddyView().apply {
+                    contentDescription = "Pip guide"
+                    setOnClickListener {
+                        playCheer()
+                        Toast.makeText(this@MainActivity, step.message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+                addView(miniPip, LinearLayout.LayoutParams(dp(30), dp(30)))
+
+                val textStack = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(6), 0, 0, 0)
+                    addView(label(step.badge, CORAL_DARK, 9.5f))
+                    addView(TextView(this@MainActivity).apply {
+                        text = step.title
+                        textSize = 13.5f
+                        setTextColor(INK)
+                        setTypeface(typeface, Typeface.BOLD)
+                    })
+                }
+                addView(textStack, LinearLayout.LayoutParams(0, -2, 1f))
+            }
+            addView(topRow)
+
+            addView(TextView(this@MainActivity).apply {
+                text = step.message
+                textSize = 12f
+                setTextColor(INK)
+                setLineSpacing(dp(2).toFloat(), 1f)
+                setPadding(0, dp(3), 0, dp(5))
+            })
+
+            val controls = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(2), 0, 0)
+
+                if (onboardingTourStep > 0) {
+                    val backBtn = actionButton("← Back") {
+                        onboardingTourStep--
+                        showOnboardingTourStep()
+                    }.apply {
+                        textSize = 12f
+                        minHeight = dp(32)
+                        minimumHeight = dp(32)
+                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                        setBackgroundColor(Color.parseColor("#E0E6ED"))
+                        setTextColor(INK)
+                    }
+                    addView(backBtn, LinearLayout.LayoutParams(0, -2, 0.26f).apply { marginEnd = dp(6) })
+                }
+
+                val nextBtn = actionButton(step.nextButtonText) {
+                    miniPip.playCheer()
+                    if (onboardingTourStep == onboardingTourSteps.lastIndex) {
+                        finishOnboarding()
+                    } else {
+                        onboardingTourStep++
+                        showOnboardingTourStep()
+                    }
+                }.apply {
+                    textSize = 12f
+                    minHeight = dp(32)
+                    minimumHeight = dp(32)
+                    setPadding(dp(8), dp(4), dp(8), dp(4))
+                }
+                addView(nextBtn, LinearLayout.LayoutParams(0, -2, if (onboardingTourStep > 0) 0.50f else 0.74f).apply { marginEnd = dp(6) })
+
+                val exitBtn = actionButton("Exit ✕") {
+                    finishOnboarding()
+                }.apply {
+                    textSize = 11.5f
+                    minHeight = dp(32)
+                    minimumHeight = dp(32)
+                    setPadding(dp(6), dp(4), dp(6), dp(4))
+                    setBackgroundColor(Color.parseColor("#E0E6ED"))
+                    setTextColor(MUTED)
+                }
+                addView(exitBtn, LinearLayout.LayoutParams(0, -2, if (onboardingTourStep > 0) 0.24f else 0.26f))
+            }
+            addView(controls)
+        }
+
+        val overlay = SpotlightTourOverlay(this, targetView, tooltipCard)
+        rootFrame.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        tourOverlayView = overlay
+    }
+
+    private fun finishOnboarding() {
+        repository.completeOnboarding()
+        if (::pageScroll.isInitialized) {
+            pageScroll.setOnTouchListener(null)
+        }
+        tourOverlayView?.let { rootFrame.removeView(it) }
+        tourOverlayView = null
+        onboardingScreen = null
+        selectedTab = DashboardTab.OVERVIEW
+        snapshot = repository.snapshot()
+        setContentView(buildScreen())
+        renderAppState()
     }
 
     private fun onboardingRoot() = LinearLayout(this).apply {
@@ -512,15 +787,6 @@ class MainActivity : android.app.Activity() {
         }
         onboardingScreen = scroll
         setContentView(scroll)
-    }
-
-    private fun finishOnboarding() {
-        repository.completeOnboarding()
-        onboardingScreen = null
-        selectedTab = DashboardTab.OVERVIEW
-        snapshot = repository.snapshot()
-        setContentView(buildScreen())
-        renderAppState()
     }
 
     private fun navButton(tab: DashboardTab): Button = Button(this).apply {

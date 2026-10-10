@@ -304,8 +304,13 @@ class TrackingRepository(context: Context) {
         )
     }
 
-    fun shouldShowMorningRecap(today: LocalDate = LocalDate.now()): Boolean =
-        preferences.getString(KEY_LAST_MORNING_RECAP_DATE, null) != today.toString()
+    fun shouldShowMorningRecap(today: LocalDate = LocalDate.now()): Boolean {
+        if (!isOnboardingComplete()) return false
+        if (preferences.getString(KEY_LAST_MORNING_RECAP_DATE, null) == today.toString()) return false
+        val yesterday = today.minusDays(1)
+        val metrics = database.dailyRollup(yesterday.toString())
+        return metrics.visits > 0 || metrics.activeSeconds > 0L || metrics.scrollCount > 0
+    }
 
     fun markMorningRecapSeen(today: LocalDate = LocalDate.now()) {
         preferences.edit()
