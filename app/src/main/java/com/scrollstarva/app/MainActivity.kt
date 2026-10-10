@@ -304,15 +304,36 @@ class MainActivity : android.app.Activity() {
             gravity = Gravity.CENTER
         })
         root.addView(TextView(this).apply {
-            text = "Turn on Scroll Starva’s accessibility tracking to continue. It measures foreground time in supported apps and scrolls in detected short-form feeds. Your activity stays on this device."
-            textSize = 16f
+            text = "Scroll Starva uses Android Accessibility to read the active app and visible screen labels in the supported apps you select. This lets it identify short-form feeds, count scrolls, measure app time, and show break reminders. The activity data is stored on this device and is not sent to Scroll Starva servers."
+            textSize = 15f
+            setTextColor(MUTED)
+            setPadding(0, dp(12), 0, dp(12))
+        })
+        val disclosureConsent = CheckBox(this).apply {
+            text = "I understand and consent to this on-device tracking."
+            textSize = 14f
+            setTextColor(INK)
+            setPadding(0, dp(4), 0, dp(12))
+        }
+        val trackingButton = actionButton("Continue to accessibility settings") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }.apply {
+            isEnabled = false
+            alpha = .55f
+        }
+        disclosureConsent.setOnCheckedChangeListener { _, checked ->
+            trackingButton.isEnabled = checked
+            trackingButton.alpha = if (checked) 1f else .55f
+        }
+        root.addView(disclosureConsent)
+        root.addView(trackingButton, LinearLayout.LayoutParams(-1, -2))
+        root.addView(TextView(this).apply {
+            text = "If Android says \"Restricted setting\": Go to device Settings → Apps → Scroll Starva → tap 3 dots (top-right) → \"Allow restricted settings\"."
+            textSize = 12f
             setTextColor(MUTED)
             gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(24))
+            setPadding(0, dp(12), 0, 0)
         })
-        root.addView(actionButton("Turn on accessibility tracking") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }, LinearLayout.LayoutParams(-1, -2))
         onboardingScreen = root.apply { tag = TRACKING_SETUP_TAG }
         setContentView(root)
     }
@@ -362,8 +383,21 @@ class MainActivity : android.app.Activity() {
                 14f
             ).apply { setPadding(0, dp(6), 0, dp(8)) })
             addView(ScrollView(this@MainActivity).apply {
+                isFillViewport = true
+                isVerticalScrollBarEnabled = true
+                setOnTouchListener { v, event ->
+                    when (event.actionMasked) {
+                        android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
+                            v.parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                        android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                            v.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
+                    }
+                    false
+                }
                 addView(appSelectionRows(onboardingSelectedPackages))
-            }, LinearLayout.LayoutParams(-1, dp(240)))
+            }, LinearLayout.LayoutParams(-1, dp(260)))
         })
         root.addView(card {
             addView(label("DEFAULT FOCUS TIME", CORAL_DARK, 12f))
@@ -1200,6 +1234,8 @@ class MainActivity : android.app.Activity() {
             val dialogSelection = repository.selectedPackages().toMutableSet()
             val appChoices = appSelectionRows(dialogSelection)
             val scrollView = ScrollView(this@MainActivity).apply {
+                isFillViewport = true
+                isVerticalScrollBarEnabled = true
                 setPadding(dp(24), dp(8), dp(24), dp(8))
                 addView(appChoices)
             }

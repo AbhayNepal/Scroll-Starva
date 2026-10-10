@@ -21,7 +21,6 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.NumberPicker
 import android.widget.ScrollView
 import android.widget.TextView
 import java.time.LocalDate
@@ -542,19 +541,21 @@ class ScrollAccessibilityService : AccessibilityService() {
                     setTextColor(Color.parseColor("#65727E"))
                     setPadding(0, dp(4), 0, 0)
                 }
-                addPromptSelector(prompt, NumberPicker(this).apply {
-                    minValue = snoozeOptions.indices.first
-                    maxValue = snoozeOptions.indices.last
-                    displayedValues = snoozeOptions.map(::snoozeWheelLabel).toTypedArray()
-                    value = selectedSnoozeIndex
-                    wrapSelectorWheel = false
-                    descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
-                    contentDescription = "Mute break reminders duration"
-                    setOnValueChangedListener { _, _, index ->
+                val snoozePicker = HorizontalWheelPicker(
+                    this,
+                    label = "Mute duration",
+                    minValue = snoozeOptions.indices.first,
+                    maxValue = snoozeOptions.indices.last,
+                    initialValue = selectedSnoozeIndex,
+                    swipeDpPerStep = 45f,
+                    formatValue = { index -> snoozeWheelLabel(snoozeOptions[index]) }
+                ).apply {
+                    onValueChanged = { index ->
                         selectedSnoozeIndex = index
                         snoozeLabel.text = snoozeDescription(snoozeOptions[index])
                     }
-                }, dp(96))
+                }
+                addPromptSelector(prompt, snoozePicker)
                 prompt.addView(snoozeLabel)
                 addPromptAction(prompt, "Mute break reminders", primary = true) {
                     repository.muteBreakReminders(snoozeOptions[selectedSnoozeIndex])

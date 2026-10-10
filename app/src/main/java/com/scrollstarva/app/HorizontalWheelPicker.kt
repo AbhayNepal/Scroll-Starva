@@ -1,19 +1,20 @@
 package com.scrollstarva.app
 
-import android.content.Context
 import android.animation.ValueAnimator
+import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Bundle
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.Gravity
+import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.animation.DecelerateInterpolator
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.view.animation.DecelerateInterpolator
 import kotlin.math.abs
 import kotlin.math.sign
 
@@ -37,14 +38,14 @@ class HorizontalWheelPicker(
         orientation = VERTICAL
         val heading = TextView(context).apply {
             text = label
-            textSize = 13f
+            textSize = 12f
             setTextColor(0xFF65727E.toInt())
             gravity = Gravity.CENTER
         }
-        addView(heading, LayoutParams(-1, dp(24)))
+        addView(heading, LayoutParams(-1, dp(18)))
         wheel = WheelView(context, label, minValue, maxValue, initialValue, formatValue)
         wheel.valueChanged = { value -> onValueChanged?.invoke(value) }
-        addView(wheel, LayoutParams(-1, dp(82)))
+        addView(wheel, LayoutParams(-1, dp(50)))
     }
 
     fun setRange(minValue: Int, maxValue: Int) {
@@ -64,15 +65,19 @@ class HorizontalWheelPicker(
             textAlign = Paint.Align.CENTER
         }
         private val selectorPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val itemSpacing = dp(64).toFloat()
+        private val itemSpacing = dp(56).toFloat()
         private val stepDistance = dp(swipeDpPerStep).toFloat()
         private var minValue = minValue
         private var maxValue = maxValue
         var selectedValue = initialValue.coerceIn(minValue, maxValue)
             private set
         var valueChanged: ((Int) -> Unit)? = null
+        private var downX = 0f
+        private var downY = 0f
         private var lastTouchX = 0f
         private var dragOffset = 0f
+        private var isHorizontalDrag = false
+        private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
         private var settlingAnimator: ValueAnimator? = null
         private var selectedColor = 0xFFC94D43.toInt()
         private var secondaryColor = 0xFF65727E.toInt()
@@ -105,15 +110,21 @@ class HorizontalWheelPicker(
             super.onDraw(canvas)
             val centerX = width / 2f
             val centerY = height / 2f
-            val halfSpacing = itemSpacing / 2f
+            val selectorWidth = dp(76).toFloat()
+            val selectorHeight = dp(34).toFloat()
 
             selectorPaint.color = 0xFFF1D8C5.toInt()
             selectorPaint.style = Paint.Style.STROKE
             selectorPaint.strokeWidth = dp(1).toFloat()
             canvas.drawRoundRect(
-                RectF(centerX - halfSpacing, centerY - dp(27), centerX + halfSpacing, centerY + dp(27)),
-                dp(12).toFloat(),
-                dp(12).toFloat(),
+                RectF(
+                    centerX - selectorWidth / 2f,
+                    centerY - selectorHeight / 2f,
+                    centerX + selectorWidth / 2f,
+                    centerY + selectorHeight / 2f
+                ),
+                dp(10).toFloat(),
+                dp(10).toFloat(),
                 selectorPaint
             )
             selectorPaint.style = Paint.Style.FILL
@@ -125,7 +136,14 @@ class HorizontalWheelPicker(
                 val x = centerX + offset * itemSpacing + visualOffset
                 if (x < -itemSpacing || x > width + itemSpacing) continue
                 val distance = abs(offset + dragOffset / stepDistance).coerceAtMost(2f)
-                textPaint.textSize = dp((28f - distance * 4f)).toFloat()
+                val formattedText = formatValue(value)
+                textPaint.textSize = if (formattedText.length > 4) {
+                    dp(13f).toFloat()
+                } else if (formattedText.length > 2) {
+                    dp(15f).toFloat()
+                } else {
+                    dp((20f - distance * 3f)).toFloat()
+                }
                 textPaint.typeface = if (offset == 0 && abs(dragOffset) < stepDistance / 2f) {
                     android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
                 } else {
@@ -134,7 +152,7 @@ class HorizontalWheelPicker(
                 textPaint.color = if (distance < .45f) selectedColor else secondaryColor
                 textPaint.alpha = (255 - distance.toInt() * 68).coerceAtLeast(65)
                 canvas.drawText(
-                    formatValue(value),
+                    formattedText,
                     x,
                     centerY - (textPaint.ascent() + textPaint.descent()) / 2f,
                     textPaint
@@ -146,45 +164,64 @@ class HorizontalWheelPicker(
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     settlingAnimator?.cancel()
+                    downX = event.x
+                    downY = event.y
                     lastTouchX = event.x
-                    parent?.requestDisallowInterceptTouchEvent(true)
+                    isHorizontalDrag = false
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val delta = event.x - lastTouchX
-                    lastTouchX = event.x
-                    dragOffset += delta
-                    while (dragOffset <= -stepDistance && selectedValue < maxValue) {
-                        dragOffset += stepDistance
-                        selectedValue++
-                        notifyValueChanged()
+                    val deltaX = event.x - lastTouchX
+                    val totalDeltaX = abs(event.x - downX)
+                    val totalDeltaY = abs(event.y - downY)
+
+                    if (!isHorizontalDrag) {
+                        if (totalDeltaX > touchSlop && totalDeltaX > totalDeltaY) {
+                            isHorizontalDrag = true
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                        } else if (totalDeltaY > touchSlop && totalDeltaY > totalDeltaX) {
+                            parent?.requestDisallowInterceptTouchEvent(false)
+                            return false
+                        }
                     }
-                    while (dragOffset >= stepDistance && selectedValue > minValue) {
-                        dragOffset -= stepDistance
-                        selectedValue--
-                        notifyValueChanged()
+
+                    if (isHorizontalDrag) {
+                        lastTouchX = event.x
+                        dragOffset += deltaX
+                        while (dragOffset <= -stepDistance && selectedValue < maxValue) {
+                            dragOffset += stepDistance
+                            selectedValue++
+                            notifyValueChanged()
+                        }
+                        while (dragOffset >= stepDistance && selectedValue > minValue) {
+                            dragOffset -= stepDistance
+                            selectedValue--
+                            notifyValueChanged()
+                        }
+                        if ((selectedValue == minValue && dragOffset > 0f) ||
+                            (selectedValue == maxValue && dragOffset < 0f)
+                        ) {
+                            dragOffset = 0f
+                        }
+                        invalidate()
                     }
-                    if ((selectedValue == minValue && dragOffset > 0f) ||
-                        (selectedValue == maxValue && dragOffset < 0f)
-                    ) {
-                        dragOffset = 0f
-                    }
-                    invalidate()
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (abs(dragOffset) >= stepDistance / 2f) {
-                        val direction = -sign(dragOffset).toInt()
-                        val updated = (selectedValue + direction).coerceIn(minValue, maxValue)
-                        if (updated != selectedValue) {
-                            selectedValue = updated
-                            dragOffset -= -direction * stepDistance
-                            notifyValueChanged()
+                    if (isHorizontalDrag) {
+                        if (abs(dragOffset) >= stepDistance / 2f) {
+                            val direction = -sign(dragOffset).toInt()
+                            val updated = (selectedValue + direction).coerceIn(minValue, maxValue)
+                            if (updated != selectedValue) {
+                                selectedValue = updated
+                                dragOffset -= -direction * stepDistance
+                                notifyValueChanged()
+                            }
                         }
+                        settleWheel()
+                        performClick()
                     }
                     parent?.requestDisallowInterceptTouchEvent(false)
-                    settleWheel()
-                    performClick()
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {

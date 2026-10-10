@@ -42,15 +42,15 @@ class FocusDurationPicker(context: Context, initialDurationMillis: Long) : Linea
                 else -> minutesPicker.setRange(0, 59)
             }
         }
-        addView(hoursPicker, LayoutParams(-1, dp(106)))
-        addView(minutesPicker, LayoutParams(-1, dp(106)))
+        addView(hoursPicker, LayoutParams(-1, dp(68)))
+        addView(minutesPicker, LayoutParams(-1, dp(68)))
     }
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
     private companion object {
-        const val HOURS_SWIPE_DP_PER_STEP = 90f
-        const val MINUTES_SWIPE_DP_PER_STEP = 20f
+        const val HOURS_SWIPE_DP_PER_STEP = 70f
+        const val MINUTES_SWIPE_DP_PER_STEP = 18f
     }
 }

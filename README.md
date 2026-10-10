@@ -11,13 +11,13 @@ The **Debug** tab shows recent accessibility events from supported apps, the eve
 Install or configure the following before building:
 
 - IntelliJ IDEA, or Android Studio
-- Android SDK Platform 35 and Android SDK Build-Tools
+- Android SDK Platform 36 and Android SDK Build-Tools 36
 - JDK 17 (required by this project; newer or older JDK versions may not work)
 - An Android emulator or a physical Android device running Android 8.0+ (API 26+)
 
 ### Install and configure the Android SDK
 
-With Android Studio, open **Tools > SDK Manager** (or **Settings/Preferences > Languages & Frameworks > Android SDK**). Install **Android SDK Platform 35** and the latest **Android SDK Build-Tools**. Note the **Android SDK Location** shown at the top of the SDK Manager.
+With Android Studio, open **Tools > SDK Manager** (or **Settings/Preferences > Languages & Frameworks > Android SDK**). Install **Android SDK Platform 36** and **Android SDK Build-Tools 36**. Note the **Android SDK Location** shown at the top of the SDK Manager.
 
 #### Without Android Studio
 
@@ -25,12 +25,12 @@ Download the **Command line tools only** for your operating system from the [And
 
 ```bash
 SDK="$HOME/Android/Sdk"
-"$SDK/cmdline-tools/bin/sdkmanager" --sdk_root="$SDK" \
-  "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-"$SDK/cmdline-tools/bin/sdkmanager" --sdk_root="$SDK" --licenses
+"$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+  "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+"$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses
 ```
 
-Change `$HOME/Android/Sdk` to your chosen SDK directory. Add its `cmdline-tools/latest/bin` and `platform-tools` directories to `PATH` if you want to run `sdkmanager` and `adb` directly from a terminal. On Windows, run `sdkmanager.bat` from Command Prompt or PowerShell and use the Windows SDK path.
+Change `$HOME/Android/Sdk` to your chosen SDK directory. The command-line tools are at `cmdline-tools/latest/bin/sdkmanager`. Add its `cmdline-tools/latest/bin` and `platform-tools` directories to `PATH` if you want to run `sdkmanager` and `adb` directly from a terminal. On Windows, run `sdkmanager.bat` from Command Prompt or PowerShell and use the Windows SDK path.
 
 Gradle needs to know that location. Choose either option:
 
@@ -38,7 +38,7 @@ Gradle needs to know that location. Choose either option:
 
   ```bash
   export ANDROID_HOME="$HOME/Android/Sdk"
-  export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/bin:$PATH"
+  export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
   ```
 
   Reload the shell configuration (for example, `source ~/.bashrc`) and open a new terminal.
@@ -98,11 +98,46 @@ This generates a debug APK at:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-To build a release APK:
+To build release artifacts, configure the upload key first (see [Signing and publishing](#signing-and-publishing)). The APK is for direct distribution and the Android App Bundle is for Google Play:
 
 ```bash
 ./gradlew assembleRelease
+./gradlew bundleRelease
 ```
+
+Outputs:
+
+```text
+app/build/outputs/apk/release/app-release.apk
+app/build/outputs/bundle/release/app-release.aab
+```
+
+### Signing and publishing
+
+The project refuses to package release artifacts unless a release keystore is configured. For Google Play, enroll in Play App Signing and keep a separate upload key in a secure backup. Generate the upload key outside this repository:
+
+```bash
+mkdir -p "$HOME/.android"
+keytool -genkeypair -v \
+  -keystore "$HOME/.android/scrollstarva-upload.jks" \
+  -keyalg RSA -keysize 2048 -validity 10000 \
+  -alias scrollstarva-upload
+```
+
+`keytool` will prompt for passwords and certificate details. Keep the keystore and its passwords backed up securely; losing the upload key can block future updates. Put these values in your user-level `~/.gradle/gradle.properties` (not this project's `gradle.properties`):
+
+```properties
+RELEASE_STORE_FILE=/home/v4lo4ou5/starva-key-store.jks
+RELEASE_STORE_PASSWORD=your-keystore-password
+RELEASE_KEY_ALIAS=scrollstarva-upload
+RELEASE_KEY_PASSWORD=your-key-password
+```
+
+Alternatively, set `SCROLL_STARVA_RELEASE_STORE_FILE`, `SCROLL_STARVA_RELEASE_STORE_PASSWORD`, `SCROLL_STARVA_RELEASE_KEY_ALIAS`, and `SCROLL_STARVA_RELEASE_KEY_PASSWORD` in your build environment or CI secret store. Never commit signing credentials or the keystore.
+
+For Google Play, upload the signed `.aab` to an internal testing track first. Before production, complete the [Accessibility API declaration](https://support.google.com/googleplay/android-developer/answer/10964491), Data safety form, store listing, and a publicly accessible privacy policy that accurately describes the app. This app is a digital-wellbeing tracker, not an accessibility tool; do not declare `isAccessibilityTool=true`. Google Play reviews the AccessibilityService use and can decline it even if the bundle builds correctly. New mobile apps and updates must target API 36 to meet the [current Play target API requirement](https://developer.android.com/google/play/requirements/target-sdk).
+
+The shared `app-debug.apk` is development-signed and sideloaded outside Play. Play Protect may warn or block an unrecognized sideloaded build; signing a release APK does not guarantee that Play Protect will trust a direct download. Publishing through a Play testing track lets Play distribute the app and is the recommended way to share it. If Play Protect displayed a specific malware verdict rather than an unknown-app warning, use that exact message to investigate the detection; the message is needed to distinguish a reputation warning from a harmful-app verdict.
 
 ## Run the app
 
@@ -154,7 +189,7 @@ In Android Studio, open the project, select a connected device or emulator, and 
 
 ## Enable tracking
 
-This app uses Android Accessibility Services to detect activity in supported short-form feeds.
+This app uses Android Accessibility Services to estimate activity in supported apps. Before opening Accessibility settings, the app explains that the service reads the active app, visible labels, and scroll events in the selected apps to identify short-form feeds, count scrolls, measure time, and show reminders. That activity remains on the device; the screen requires the user’s affirmative consent before continuing.
 
 After the app is installed:
 

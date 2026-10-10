@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">Scroll Starva</string>
-    <string name="accessibility_description">Tracks feed sessions and scrolls locally. Shows a 10-second pause after rapid re-entry and a break reminder after 20 minutes.</string>
+    <string name="accessibility_description">Reads the active app, visible labels, and scroll events only in selected apps to estimate feed time and scrolls. Keeps activity on this device and offers mindful break reminders.</string>
 </resources>
