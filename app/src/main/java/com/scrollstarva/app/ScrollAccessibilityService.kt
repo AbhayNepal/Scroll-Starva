@@ -83,6 +83,7 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        updatePackageFilters()
         repository.finishInterruptedSessions()
         AccessibilityDiagnostics.record("Accessibility service connected and tracking enabled")
         val activeWindow = rootInActiveWindow
@@ -262,6 +263,15 @@ class ScrollAccessibilityService : AccessibilityService() {
     private fun scheduleStopTracking() {
         handler.removeCallbacks(delayedStop)
         handler.postDelayed(delayedStop, FEED_EXIT_GRACE_MILLIS)
+    }
+
+    private fun updatePackageFilters() {
+        val info = serviceInfo ?: return
+        val selectedPackages = repository.selectedPackages()
+        if (selectedPackages.isNotEmpty()) {
+            info.packageNames = selectedPackages.toTypedArray()
+            this.serviceInfo = info
+        }
     }
 
     private fun resolveAppLabel(packageName: String): String =
