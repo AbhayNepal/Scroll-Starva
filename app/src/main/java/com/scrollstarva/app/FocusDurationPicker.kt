@@ -49,8 +49,14 @@ class FocusDurationPicker(context: Context, initialDurationMillis: Long) : Linea
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
+    /**
+     * Swipe sensitivity constants (density-independent pixels per value step).
+     */
     private companion object {
+        /** Swipe distance in DP required to advance one hour on the hours wheel picker. */
         const val HOURS_SWIPE_DP_PER_STEP = 70f
+
+        /** Swipe distance in DP required to advance one minute on the minutes wheel picker. */
         const val MINUTES_SWIPE_DP_PER_STEP = 18f
     }
 }

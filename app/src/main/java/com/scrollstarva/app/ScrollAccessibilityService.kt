@@ -23,6 +23,11 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -55,7 +60,12 @@ class ScrollAccessibilityService : AccessibilityService() {
     private val focusReminderRunnable = Runnable {
         if (repository.isFocusReminderDue()) {
             repository.markFocusReminderShown()
-            showFocusInterruptionPrompt()
+            if (isTrackedAppForeground()) {
+                showFocusInterruptionPrompt()
+            } else {
+                removeIntervention()
+                showFocusResumedNotification()
+            }
         }
     }
 
@@ -271,6 +281,57 @@ class ScrollAccessibilityService : AccessibilityService() {
         if (selectedPackages.isNotEmpty()) {
             info.packageNames = selectedPackages.toTypedArray()
             this.serviceInfo = info
+        }
+    }
+
+    private fun showFocusResumedNotification() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        if (notificationManager != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    FOCUS_NOTIFICATION_CHANNEL_ID,
+                    "Focus & Reminders",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notifications for focus session status and reminders"
+                    enableVibration(true)
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            val notification = Notification.Builder(this, FOCUS_NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("Focus Resumed 🎯")
+                .setContentText("Your scroll break has ended and your focus session is back on track.")
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build()
+
+            try {
+                notificationManager.notify(FOCUS_RESUMED_NOTIFICATION_ID, notification)
+            } catch (_: Exception) {}
+        }
+
+        try {
+            startActivity(intent)
+        } catch (_: Exception) {}
+
+        handler.post {
+            Toast.makeText(
+                this,
+                "Focus Resumed: Your scroll break is complete.",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -933,14 +994,29 @@ class ScrollAccessibilityService : AccessibilityService() {
         return verticalMoved && !horizontalMoved
     }
 
+    /**
+     * Constants for accessibility service notifications, intervals, event types, and label lengths.
+     */
     private companion object {
+        const val FOCUS_NOTIFICATION_CHANNEL_ID = "scroll_starva_focus"
+        const val FOCUS_RESUMED_NOTIFICATION_ID = 1001
+
+        /** Set of accessibility event types used to detect active short-form feed navigation. */
         val FEED_DETECTION_EVENT_TYPES = setOf(
             AccessibilityEvent.TYPE_VIEW_SCROLLED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         )
+
+        /** Interval in milliseconds for checking active session progress and updating checkpoints. */
         const val CHECKPOINT_INTERVAL_MILLIS = 10_000L
+
+        /** Minimum time threshold in milliseconds between scroll strokes to prevent duplicate counts. */
         const val SCROLL_DEBOUNCE_MILLIS = 750L
+
+        /** Grace period in milliseconds before concluding a session when exiting a tracked app. */
         const val FEED_EXIT_GRACE_MILLIS = 2_500L
+
+        /** Maximum character length of combined visible accessibility node labels. */
         const val MAX_COMBINED_LABEL_LENGTH = 1_800
     }
 

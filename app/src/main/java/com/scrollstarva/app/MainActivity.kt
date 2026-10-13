@@ -18,6 +18,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.animation.ValueAnimator
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -294,6 +295,11 @@ class MainActivity : android.app.Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
         repository = TrackingRepository(this)
         preloadInstalledTrackedApps()
         snapshot = repository.snapshot()
@@ -2583,21 +2589,53 @@ class MainActivity : android.app.Activity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    /**
+     * Color themes, layout tags, step indices, and refresh timing constants for main activity.
+     */
     private companion object {
+        /** Interval in milliseconds for refreshing diagnostic event logs. */
         const val DIAGNOSTIC_REFRESH_MILLIS = 750L
+
+        /** Interval in milliseconds for updating active focus timer countdown. */
         const val FOCUS_TIMER_REFRESH_MILLIS = 1_000L
+
+        /** Duration in milliseconds for flame animation cycles. */
         const val FIRE_ANIMATION_MILLIS = 850L
+
+        /** Duration in milliseconds for smoke animation cycles. */
         const val SMOKE_ANIMATION_MILLIS = 2_100L
+
+        /** Onboarding step index representing the initial settings & timer configuration screen. */
         const val ONBOARDING_SETTINGS_STEP = -1
+
+        /** Layout tag identifying the tracking setup / consent screen. */
         const val TRACKING_SETUP_TAG = "tracking_setup"
+
+        /** Primary cream background color. */
         val CREAM = Color.parseColor("#FFF8EF")
+
+        /** Primary ink text color. */
         val INK = Color.parseColor("#17202A")
+
+        /** Muted subtitle text color. */
         val MUTED = Color.parseColor("#65727E")
+
+        /** Coral primary accent color. */
         val CORAL = Color.parseColor("#F26B5E")
+
+        /** Dark coral header/badge accent color. */
         val CORAL_DARK = Color.parseColor("#C94D43")
+
+        /** Success green accent color. */
         val GREEN = Color.parseColor("#287A57")
+
+        /** Time tab teal accent color. */
         val TEAL = Color.parseColor("#2C9A91")
+
+        /** Scrolls tab purple accent color. */
         val PURPLE = Color.parseColor("#8371C8")
+
+        /** Gold streak/award accent color. */
         val GOLD = Color.parseColor("#F5C451")
     }
 }

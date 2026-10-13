@@ -375,13 +375,29 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     private fun clamp(value: Double): Double = min(100.0, max(0.0, value))
 
+    /**
+     * Database configuration, threshold definitions, and de-addiction algorithm constants.
+     */
     private companion object {
+        /** Name of the SQLite database file on device storage. */
         const val DATABASE_NAME = "scroll_starva.db"
+
+        /** Database schema version number. */
         const val DATABASE_VERSION = 2
+
+        /** Maximum inter-session gap in milliseconds to count as a rapid re-entry (<5 minutes). */
         const val RAPID_REENTRY_MILLIS = 5 * 60 * 1000L
+
+        /** Maximum session duration in seconds to count as a micro-check (<60 seconds). */
         const val MICRO_CHECK_SECONDS = 60L
+
+        /** Continuous session threshold in seconds to count as a marathon session (>20 minutes). */
         const val MARATHON_SECONDS = 20 * 60L
+
+        /** Scroll cadence threshold in strokes-per-minute (SPM) indicating agitation (>25 SPM). */
         const val AGITATION_CADENCE_SPM = 25.0
+
+        /** Daily active seconds threshold (<5 minutes) to qualify as a detox day for rolling medians. */
         const val DETOX_DAY_SECONDS = 300L
     }
 }

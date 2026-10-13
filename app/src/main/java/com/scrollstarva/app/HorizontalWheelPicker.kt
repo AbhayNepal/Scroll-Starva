@@ -295,7 +295,11 @@ class HorizontalWheelPicker(
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    /**
+     * Animation and timing constants for the wheel picker.
+     */
     private companion object {
+        /** Duration in milliseconds for the deceleration animation when settling on a value. */
         const val WHEEL_SETTLE_MILLIS = 140L
     }
 }
