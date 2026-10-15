@@ -164,7 +164,6 @@ class MainActivity : android.app.Activity() {
     private lateinit var pageSubtitle: TextView
     private lateinit var navigationBar: LinearLayout
     private lateinit var buddyView: FloatingBuddyView
-    private lateinit var diagnosticLogView: TextView
     private lateinit var snapshot: TrackingSnapshot
     private var focusMode = false
     private lateinit var focusTimerView: TextView
@@ -267,14 +266,7 @@ class MainActivity : android.app.Activity() {
             cardIndex = 7
         )
     )
-    private val diagnosticRefresh = object : Runnable {
-        override fun run() {
-            if (::diagnosticLogView.isInitialized) {
-                updateDiagnosticLog()
-                diagnosticHandler.postDelayed(this, DIAGNOSTIC_REFRESH_MILLIS)
-            }
-        }
-    }
+
     private val focusTimerRefresh = object : Runnable {
         override fun run() {
             if (!focusMode || !activityResumed) return
@@ -319,7 +311,6 @@ class MainActivity : android.app.Activity() {
 
     override fun onPause() {
         activityResumed = false
-        diagnosticHandler.removeCallbacks(diagnosticRefresh)
         diagnosticHandler.removeCallbacks(focusTimerRefresh)
         super.onPause()
     }
@@ -418,7 +409,6 @@ class MainActivity : android.app.Activity() {
         if (!isAccessibilityEnabled()) {
             focusMode = false
             diagnosticHandler.removeCallbacks(focusTimerRefresh)
-            diagnosticHandler.removeCallbacks(diagnosticRefresh)
             showTrackingSetupScreen()
             return
         }
@@ -443,7 +433,6 @@ class MainActivity : android.app.Activity() {
         } else {
             refresh()
         }
-        startDiagnosticRefresh()
         showMorningRecapIfNeeded()
     }
 
@@ -1077,7 +1066,6 @@ class MainActivity : android.app.Activity() {
 
     private fun showFocusScreen(focusSession: FocusSession) {
         focusMode = true
-        diagnosticHandler.removeCallbacks(diagnosticRefresh)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -1192,7 +1180,6 @@ class MainActivity : android.app.Activity() {
             DashboardTab.SCROLLS -> Color.parseColor("#F6F3FC")
             DashboardTab.PROGRESS -> Color.parseColor("#F1F8F2")
         })
-        diagnosticHandler.removeCallbacks(diagnosticRefresh)
         pageScroll.scrollTo(0, 0)
         updateNavigation()
         animatePageIn()
@@ -1767,78 +1754,7 @@ class MainActivity : android.app.Activity() {
 
     }
 
-    private fun buildDebugTab() {
-        val enabled = isAccessibilityEnabled()
-        pageContent.addView(card {
-            addView(label(
-                if (enabled) "ACCESSIBILITY SERVICE: ENABLED" else "ACCESSIBILITY SERVICE: OFF",
-                if (enabled) GREEN else CORAL_DARK,
-                13f
-            ))
-            addView(label(
-                "Recent events include package, event type, source class, detected feed label, " +
-                    "visible accessibility text, scroll deltas, and whether the count was accepted.",
-                INK,
-                14f
-            ).apply { setPadding(0, dp(8), 0, dp(12)) })
-            val actions = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(actionButton("Copy log") { copyDiagnosticLog() },
-                    LinearLayout.LayoutParams(0, -2, 1f))
-                addView(actionButton("Clear") {
-                    AccessibilityDiagnostics.clear()
-                    updateDiagnosticLog()
-                }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(8) })
-            }
-            addView(actions)
-        })
-        pageContent.addView(sectionTitle("Recent accessibility events"))
-        pageContent.addView(card {
-            diagnosticLogView = TextView(this@MainActivity).apply {
-                text = "Waiting for events from supported apps…"
-                textSize = 12f
-                typeface = Typeface.MONOSPACE
-                setTextColor(INK)
-                setTextIsSelectable(true)
-                setLineSpacing(dp(2).toFloat(), 1f)
-            }
-            addView(diagnosticLogView)
-        })
-        pageContent.addView(card {
-            addView(label("PRIVACY", CORAL_DARK, 12f))
-            addView(label(
-                "Diagnostics are kept in memory on this device and retain at most 120 recent entries. " +
-                    "Visible labels can contain text shown in the feed. Use Copy log only when you intend to share it.",
-                INK,
-                13f
-            ).apply { setPadding(0, dp(6), 0, 0) })
-        })
-        updateDiagnosticLog()
-    }
 
-    private fun startDiagnosticRefresh() {
-        diagnosticHandler.removeCallbacks(diagnosticRefresh)
-    }
-
-    private fun updateDiagnosticLog() {
-        if (!::diagnosticLogView.isInitialized) return
-        val entries = AccessibilityDiagnostics.recent()
-        diagnosticLogView.text = if (entries.isEmpty()) {
-            "No diagnostics yet.\n\nOpen a supported app, scroll a few times, then return here."
-        } else {
-            AccessibilityDiagnostics.format(entries)
-        }
-    }
-
-    private fun copyDiagnosticLog() {
-        val clipboard = getSystemService(ClipboardManager::class.java)
-        checkNotNull(clipboard) { "Clipboard service is unavailable" }.setPrimaryClip(
-            ClipData.newPlainText("Scroll Starva diagnostics", AccessibilityDiagnostics.format(
-                AccessibilityDiagnostics.recent()
-            ))
-        )
-        Toast.makeText(this, "Diagnostic log copied", Toast.LENGTH_SHORT).show()
-    }
 
     private fun activityFeedCard(activities: List<ScrollActivity>): View = card {
         if (activities.isEmpty()) {

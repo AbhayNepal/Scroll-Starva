@@ -45,6 +45,17 @@ class ScrollAccessibilityService : AccessibilityService() {
     private var trackingStartedAtWall = 0L
     private var trackingFeedActive = false
     private var lastCheckpointElapsed = 0L
+    private var lastEventElapsed = SystemClock.elapsedRealtime()
+    private var isScreenOffReceiverRegistered = false
+    private val screenOffReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                AccessibilityDiagnostics.record("Screen turned off -> stopping active session")
+                stopTracking()
+                removeIntervention()
+            }
+        }
+    }
     private var sessionScrollCount = 0
     private var lastScrollAt = 0L
     private var lastLegacyScrollPosition: LegacyScrollPosition? = null
@@ -93,6 +104,12 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        if (!isScreenOffReceiverRegistered) {
+            try {
+                registerReceiver(screenOffReceiver, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF))
+                isScreenOffReceiverRegistered = true
+            } catch (_: Exception) {}
+        }
         updatePackageFilters()
         repository.finishInterruptedSessions()
         AccessibilityDiagnostics.record("Accessibility service connected and tracking enabled")
@@ -113,6 +130,7 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        lastEventElapsed = SystemClock.elapsedRealtime()
         val packageName = event.packageName?.toString()
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             if (packageName == this.packageName ||
@@ -209,6 +227,12 @@ class ScrollAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         stopTracking()
         removeIntervention()
+        if (isScreenOffReceiverRegistered) {
+            try {
+                unregisterReceiver(screenOffReceiver)
+                isScreenOffReceiverRegistered = false
+            } catch (_: Exception) {}
+        }
         handler.removeCallbacks(delayedStop)
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
@@ -357,8 +381,16 @@ class ScrollAccessibilityService : AccessibilityService() {
         showPendingMarathonReminderIfDue()
         val activityId = trackingActivityId ?: return
         val nowElapsed = SystemClock.elapsedRealtime()
+
+        if (nowElapsed - lastEventElapsed > INACTIVITY_TIMEOUT_MILLIS) {
+            AccessibilityDiagnostics.record("Inactivity timeout (>30s) -> stopping active session")
+            stopTracking()
+            return
+        }
+
+        val deltaMillis = (nowElapsed - lastCheckpointElapsed).coerceAtMost(CHECKPOINT_INTERVAL_MILLIS + 5_000L)
+        repository.addActiveMillis(maxOf(0L, deltaMillis))
         val duration = maxOf(0L, nowElapsed - trackingStartedAtElapsed)
-        repository.addActiveMillis(maxOf(0L, nowElapsed - lastCheckpointElapsed))
         repository.checkpointSession(
             activityId,
             System.currentTimeMillis(),
@@ -370,10 +402,9 @@ class ScrollAccessibilityService : AccessibilityService() {
         maybeShowDailyLimitPrompt()
         maybeShowMarathonReminder(nowElapsed)
 
-        if (LocalDate.now() != LocalDate.ofInstant(
-                java.time.Instant.ofEpochMilli(trackingStartedAtWall),
-                ZoneId.systemDefault()
-            )
+        if (LocalDate.now() != java.time.Instant.ofEpochMilli(trackingStartedAtWall)
+                .atZone(ZoneId.systemDefault())
+                .toLocalDate()
         ) {
             rollSessionOverAtMidnight(nowElapsed)
         }
@@ -1000,6 +1031,7 @@ class ScrollAccessibilityService : AccessibilityService() {
     private companion object {
         const val FOCUS_NOTIFICATION_CHANNEL_ID = "scroll_starva_focus"
         const val FOCUS_RESUMED_NOTIFICATION_ID = 1001
+        const val INACTIVITY_TIMEOUT_MILLIS = 30_000L
 
         /** Set of accessibility event types used to detect active short-form feed navigation. */
         val FEED_DETECTION_EVENT_TYPES = setOf(

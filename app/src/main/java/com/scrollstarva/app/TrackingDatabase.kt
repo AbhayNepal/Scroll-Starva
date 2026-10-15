@@ -101,8 +101,11 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         startedAtMillis: Long,
         countAsReentry: Boolean
     ): SessionStart {
+        finishInterruptedSessions()
         val db = writableDatabase
-        val date = LocalDate.ofInstant(java.time.Instant.ofEpochMilli(startedAtMillis), ZoneId.systemDefault())
+        val date = java.time.Instant.ofEpochMilli(startedAtMillis)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
         var previousEnd: Long? = null
         db.rawQuery(
             """
@@ -165,7 +168,15 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         strokeCount: Int,
         completed: Boolean
     ) {
-        val durationSeconds = max(0L, durationMillis / 1000)
+        var startMillis = endedAtMillis
+        readableDatabase.rawQuery(
+            "SELECT start_timestamp FROM scroll_activities WHERE activity_id = ?",
+            arrayOf(activityId)
+        ).use { cursor ->
+            if (cursor.moveToFirst()) startMillis = cursor.getLong(0)
+        }
+        val wallSeconds = maxOf(0L, (endedAtMillis - startMillis) / 1000)
+        val durationSeconds = minOf(maxOf(0L, durationMillis / 1000), wallSeconds)
         val cadence = if (durationSeconds > 0) strokeCount * 60.0 / durationSeconds else 0.0
         val agitationSeconds = if (cadence > AGITATION_CADENCE_SPM) durationSeconds else 0L
         val values = ContentValues().apply {
@@ -190,6 +201,7 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
     }
 
     fun finishInterruptedSessions() {
+        sanitizeInflatedSessions()
         val db = writableDatabase
         val dates = mutableSetOf<LocalDate>()
         db.rawQuery(
@@ -204,10 +216,39 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             """
             UPDATE scroll_activities SET
                 completed = 1,
+                duration_seconds = CASE 
+                    WHEN (end_timestamp - start_timestamp) / 1000 > 0 
+                    THEN (end_timestamp - start_timestamp) / 1000 
+                    ELSE duration_seconds 
+                END,
                 is_micro_check = CASE WHEN duration_seconds < ? THEN 1 ELSE 0 END
             WHERE completed = 0
             """.trimIndent(),
             arrayOf(MICRO_CHECK_SECONDS)
+        )
+        dates.forEach(::refreshRollup)
+    }
+
+    fun sanitizeInflatedSessions() {
+        val db = writableDatabase
+        val dates = mutableSetOf<LocalDate>()
+        db.rawQuery(
+            "SELECT DISTINCT date_key FROM scroll_activities WHERE duration_seconds > 14400 OR (end_timestamp > start_timestamp AND duration_seconds > (end_timestamp - start_timestamp) / 1000 + 5)",
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                dates += LocalDate.parse(cursor.getString(0))
+            }
+        }
+        db.execSQL(
+            """
+            UPDATE scroll_activities 
+            SET duration_seconds = CASE 
+                WHEN end_timestamp > start_timestamp THEN (end_timestamp - start_timestamp) / 1000 
+                ELSE 60 
+            END
+            WHERE duration_seconds > 14400 OR (end_timestamp > start_timestamp AND duration_seconds > (end_timestamp - start_timestamp) / 1000 + 5)
+            """.trimIndent()
         )
         dates.forEach(::refreshRollup)
     }
