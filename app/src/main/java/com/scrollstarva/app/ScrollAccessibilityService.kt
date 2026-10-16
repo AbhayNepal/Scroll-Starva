@@ -132,26 +132,15 @@ class ScrollAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         lastEventElapsed = SystemClock.elapsedRealtime()
         val packageName = event.packageName?.toString()
+
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            if (packageName == this.packageName ||
-                packageName == null ||
-                packageName !in repository.selectedPackages()
-            ) {
+            updatePackageFilters()
+        }
+
+        if (packageName == null || packageName == this.packageName || packageName !in repository.selectedPackages()) {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 if (trackingPackage != null) scheduleStopTracking()
-                return
-            }
-        }
-
-        if (packageName == this.packageName) return
-
-        if (packageName == null || packageName == this.packageName) {
-            return
-        }
-        if (packageName !in repository.selectedPackages()) {
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                trackingPackage != null
-            ) {
-                scheduleStopTracking()
+                removeIntervention()
             }
             return
         }
@@ -159,9 +148,17 @@ class ScrollAccessibilityService : AccessibilityService() {
 
         val focusSession = repository.activeFocusSession()
         if (focusSession != null) {
-            if (!focusSession.isPaused || focusSession.reminderAtMillis == 0L) {
-                if (trackingPackage != null) stopTracking()
+            if (!focusSession.isPaused) {
+                startTracking(packageName)
                 showFocusInterruptionPrompt()
+                return
+            } else if (focusSession.reminderAtMillis > 0L && System.currentTimeMillis() >= focusSession.reminderAtMillis) {
+                repository.resumeFocusSession()
+                startTracking(packageName)
+                showFocusInterruptionPrompt()
+                return
+            } else if (focusSession.isPaused) {
+                // On scroll break -> allow browsing during break without prompt
                 return
             }
         }
@@ -303,8 +300,11 @@ class ScrollAccessibilityService : AccessibilityService() {
         val info = serviceInfo ?: return
         val selectedPackages = repository.selectedPackages()
         if (selectedPackages.isNotEmpty()) {
-            info.packageNames = selectedPackages.toTypedArray()
-            this.serviceInfo = info
+            val currentFilter = info.packageNames?.toSet().orEmpty()
+            if (currentFilter != selectedPackages) {
+                info.packageNames = selectedPackages.toTypedArray()
+                this.serviceInfo = info
+            }
         }
     }
 
