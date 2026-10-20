@@ -139,8 +139,11 @@ class ScrollAccessibilityService : AccessibilityService() {
 
         if (packageName == null || packageName == this.packageName || packageName !in repository.selectedPackages()) {
             if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-                if (trackingPackage != null) scheduleStopTracking()
-                removeIntervention()
+                val activePkg = rootInActiveWindow?.packageName?.toString()
+                if (activePkg == null || activePkg !in repository.selectedPackages() || activePkg == this.packageName) {
+                    if (trackingPackage != null) scheduleStopTracking()
+                    removeIntervention()
+                }
             }
             return
         }
@@ -298,13 +301,9 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     private fun updatePackageFilters() {
         val info = serviceInfo ?: return
-        val selectedPackages = repository.selectedPackages()
-        if (selectedPackages.isNotEmpty()) {
-            val currentFilter = info.packageNames?.toSet().orEmpty()
-            if (currentFilter != selectedPackages) {
-                info.packageNames = selectedPackages.toTypedArray()
-                this.serviceInfo = info
-            }
+        if (info.packageNames != null) {
+            info.packageNames = null
+            this.serviceInfo = info
         }
     }
 
