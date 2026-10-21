@@ -56,6 +56,13 @@ class ScrollAccessibilityService : AccessibilityService() {
             }
         }
     }
+    private val systemOverlayPackages = setOf(
+        "com.android.systemui",
+        "android",
+        "com.samsung.android.biometrics.app.setting",
+        "com.samsung.android.honeyboard",
+        "com.google.android.inputmethod.latin"
+    )
     private var sessionScrollCount = 0
     private var lastScrollAt = 0L
     private var lastLegacyScrollPosition: LegacyScrollPosition? = null
@@ -138,9 +145,9 @@ class ScrollAccessibilityService : AccessibilityService() {
         }
 
         if (packageName == null || packageName == this.packageName || packageName !in repository.selectedPackages()) {
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && packageName !in systemOverlayPackages) {
                 val activePkg = rootInActiveWindow?.packageName?.toString()
-                if (activePkg == null || activePkg !in repository.selectedPackages() || activePkg == this.packageName) {
+                if (activePkg == null || (activePkg !in repository.selectedPackages() && activePkg !in systemOverlayPackages) || activePkg == this.packageName) {
                     if (trackingPackage != null) scheduleStopTracking()
                     removeIntervention()
                 }
@@ -782,7 +789,8 @@ class ScrollAccessibilityService : AccessibilityService() {
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
