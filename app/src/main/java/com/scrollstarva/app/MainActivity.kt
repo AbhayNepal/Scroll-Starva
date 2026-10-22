@@ -2,8 +2,6 @@ package com.scrollstarva.app
 
 import android.content.Intent
 import android.content.Context
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.app.AlertDialog
 import android.app.Dialog
 import android.graphics.Canvas
@@ -295,7 +293,7 @@ class MainActivity : android.app.Activity() {
             }
             val completedSeconds = repository.todayFocusSeconds()
             val targetMin = repository.dailyFocusTargetMinutes()
-            val fraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+            val fraction = maxOf(0.50f, (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f))
             if (::headerHeartView.isInitialized) {
                 headerHeartView.fillFraction = fraction
             }
@@ -380,7 +378,8 @@ class MainActivity : android.app.Activity() {
         headerHeartView = FocusHeartView(this).apply {
             val completedSeconds = repository.todayFocusSeconds()
             val targetMin = repository.dailyFocusTargetMinutes()
-            fillFraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+            fillFraction = maxOf(0.50f, (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f))
+            showBubbles = false
             contentDescription = "Mindful Focus Heart. Tap to view progress or start focus timer."
             setOnClickListener { showFocusHeartPopup() }
         }
@@ -1150,7 +1149,7 @@ class MainActivity : android.app.Activity() {
         val completedSeconds = repository.todayFocusSeconds()
         val completedMin = completedSeconds / 60
         val targetMin = repository.dailyFocusTargetMinutes()
-        val fraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+        val fraction = maxOf(0.50f, (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f))
         val percent = (fraction * 100).toInt()
 
         val messages = listOf(
@@ -1171,6 +1170,7 @@ class MainActivity : android.app.Activity() {
 
             val popupHeart = FocusHeartView(this@MainActivity).apply {
                 fillFraction = fraction
+                showBubbles = false
             }
             addView(popupHeart, LinearLayout.LayoutParams(dp(80), dp(80)).apply {
                 bottomMargin = dp(16)
@@ -1234,7 +1234,8 @@ class MainActivity : android.app.Activity() {
         heroHeartView = FocusHeartView(this).apply {
             val completedSeconds = repository.todayFocusSeconds()
             val targetMin = repository.dailyFocusTargetMinutes()
-            fillFraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+            fillFraction = maxOf(0.50f, (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f))
+            showBubbles = true
         }
         root.addView(heroHeartView, LinearLayout.LayoutParams(dp(160), dp(160)).apply {
             topMargin = dp(16)
