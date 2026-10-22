@@ -111,29 +111,33 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        if (!isScreenOffReceiverRegistered) {
-            try {
-                registerReceiver(screenOffReceiver, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF))
-                isScreenOffReceiverRegistered = true
-            } catch (_: Exception) {}
-        }
-        updatePackageFilters()
-        repository.finishInterruptedSessions()
-        AccessibilityDiagnostics.record("Accessibility service connected and tracking enabled")
-        val activeWindow = rootInActiveWindow
-        val activePackageName = activeWindow?.packageName?.toString()
-        if (activePackageName != null && activePackageName in repository.selectedPackages()) {
-            startTracking(activePackageName)
-            trackingFeedActive = trackingPlatform?.let { platform ->
-                FeedDetector.isShortFormFeed(FeedDetector.visibleLabels(activeWindow), platform)
-            } ?: false
-            if (trackingFeedActive) {
-                showPendingMarathonReminderIfDue()
+        try {
+            if (!isScreenOffReceiverRegistered) {
+                try {
+                    registerReceiver(screenOffReceiver, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF))
+                    isScreenOffReceiverRegistered = true
+                } catch (_: Exception) {}
             }
+            updatePackageFilters()
+            repository.finishInterruptedSessions()
+            AccessibilityDiagnostics.record("Accessibility service connected and tracking enabled")
+            val activeWindow = try { rootInActiveWindow } catch (_: Exception) { null }
+            val activePackageName = activeWindow?.packageName?.toString()
+            if (activePackageName != null && activePackageName in repository.selectedPackages()) {
+                startTracking(activePackageName)
+                trackingFeedActive = trackingPlatform?.let { platform ->
+                    FeedDetector.isShortFormFeed(FeedDetector.visibleLabels(activeWindow), platform)
+                } ?: false
+                if (trackingFeedActive) {
+                    showPendingMarathonReminderIfDue()
+                }
+            }
+            scheduleFocusReminder()
+            schedulePendingMarathonReminder()
+            handler.postDelayed(flushTimer, CHECKPOINT_INTERVAL_MILLIS)
+        } catch (e: Exception) {
+            AccessibilityDiagnostics.record("Error in onServiceConnected: ${e.message}")
         }
-        scheduleFocusReminder()
-        schedulePendingMarathonReminder()
-        handler.postDelayed(flushTimer, CHECKPOINT_INTERVAL_MILLIS)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -1129,15 +1133,17 @@ object FeedDetector {
 
     private fun collectText(node: AccessibilityNodeInfo, output: StringBuilder, depth: Int) {
         if (depth > 20 || output.length >= MAX_DIAGNOSTIC_LABEL_LENGTH) return
-        node.text?.let { output.append(' ').append(it) }
-        node.contentDescription?.let { output.append(' ').append(it) }
-        for (index in 0 until node.childCount) {
-            if (output.length >= MAX_DIAGNOSTIC_LABEL_LENGTH) break
-            node.getChild(index)?.let { child ->
-                collectText(child, output, depth + 1)
-                child.recycle()
+        try {
+            node.text?.let { output.append(' ').append(it) }
+            node.contentDescription?.let { output.append(' ').append(it) }
+            for (index in 0 until node.childCount) {
+                if (output.length >= MAX_DIAGNOSTIC_LABEL_LENGTH) break
+                val child = try { node.getChild(index) } catch (_: Exception) { null }
+                if (child != null) {
+                    collectText(child, output, depth + 1)
+                }
             }
-        }
+        } catch (_: Exception) {}
     }
 
     private const val MAX_DIAGNOSTIC_LABEL_LENGTH = 1_200

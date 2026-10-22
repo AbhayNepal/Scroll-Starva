@@ -291,6 +291,53 @@ class TrackingRepository(context: Context) {
         preferences.edit().putInt(KEY_DEFAULT_FOCUS_MINUTES, minutes).apply()
     }
 
+    /** Returns daily focus target in minutes (default 180 min = 3 hours). */
+    fun dailyFocusTargetMinutes(): Int = preferences.getInt(
+        KEY_DAILY_FOCUS_TARGET_MINUTES,
+        180
+    ).coerceIn(15, 720)
+
+    /** Sets daily focus target in minutes. */
+    fun setDailyFocusTargetMinutes(minutes: Int) {
+        require(minutes in 15..720) { "Daily focus target must be between 15 and 720 minutes" }
+        preferences.edit().putInt(KEY_DAILY_FOCUS_TARGET_MINUTES, minutes).apply()
+    }
+
+    /** Returns total focus seconds completed today plus active focus session elapsed time. */
+    fun todayFocusSeconds(): Long {
+        val todayStr = LocalDate.now().toString()
+        val savedDate = preferences.getString(KEY_FOCUS_SECONDS_DATE, null)
+        val completedSeconds = if (savedDate == todayStr) {
+            preferences.getLong(KEY_TODAY_FOCUS_SECONDS, 0L)
+        } else {
+            0L
+        }
+        val activeSession = activeFocusSession()
+        val activeElapsed = if (activeSession != null && !activeSession.isPaused) {
+            val totalSessionMillis = defaultFocusMinutes() * 60_000L
+            val remainingMillis = (activeSession.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+            ((totalSessionMillis - remainingMillis) / 1_000L).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        return completedSeconds + activeElapsed
+    }
+
+    /** Adds completed focus seconds to today's cumulative total. */
+    fun addCompletedFocusSeconds(seconds: Long) {
+        if (seconds <= 0) return
+        val todayStr = LocalDate.now().toString()
+        val currentTotal = if (preferences.getString(KEY_FOCUS_SECONDS_DATE, null) == todayStr) {
+            preferences.getLong(KEY_TODAY_FOCUS_SECONDS, 0L)
+        } else {
+            0L
+        }
+        preferences.edit()
+            .putString(KEY_FOCUS_SECONDS_DATE, todayStr)
+            .putLong(KEY_TODAY_FOCUS_SECONDS, currentTotal + seconds)
+            .apply()
+    }
+
     /** Returns the daily scroll limit target. */
     fun dailyScrollTarget(): Int = preferences.getInt(
         KEY_DAILY_SCROLL_TARGET,
@@ -562,7 +609,7 @@ class TrackingRepository(context: Context) {
         val endsAtMillis = preferences.getLong(KEY_FOCUS_ENDS_AT, 0L)
         val pausedRemainingMillis = preferences.getLong(KEY_FOCUS_PAUSED_REMAINING, 0L)
         if (pausedRemainingMillis <= 0L && endsAtMillis <= System.currentTimeMillis()) {
-            endFocusSession()
+//            endFocusSession()
             return null
         }
         return FocusSession(
@@ -633,6 +680,13 @@ class TrackingRepository(context: Context) {
 
     /** Ends and clears the active focus session immediately. */
     fun endFocusSession() {
+        val session = activeFocusSession()
+        if (session != null && !session.isPaused) {
+            val totalSessionMillis = defaultFocusMinutes() * 60_000L
+            val remainingMillis = (session.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+            val elapsedSeconds = ((totalSessionMillis - remainingMillis) / 1_000L).coerceAtLeast(0L)
+            addCompletedFocusSeconds(elapsedSeconds)
+        }
         preferences.edit()
             .remove(KEY_FOCUS_ENDS_AT)
             .remove(KEY_FOCUS_QUOTE)
@@ -671,6 +725,9 @@ class TrackingRepository(context: Context) {
      * Preference keys used for storing tracking, session, goal, and timer state in SharedPreferences.
      */
     private companion object {
+        const val KEY_DAILY_FOCUS_TARGET_MINUTES = "daily_focus_target_minutes"
+        const val KEY_TODAY_FOCUS_SECONDS = "today_focus_seconds"
+        const val KEY_FOCUS_SECONDS_DATE = "focus_seconds_date"
         /** Key storing the current date string (yyyy-MM-dd) for daily counter resets. */
         const val KEY_DATE = "date"
         /** Key storing today's cumulative scroll count. */

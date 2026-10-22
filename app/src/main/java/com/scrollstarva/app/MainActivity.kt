@@ -168,6 +168,10 @@ class MainActivity : android.app.Activity() {
     private var focusMode = false
     private lateinit var focusTimerView: TextView
     private lateinit var focusStatusView: TextView
+    private lateinit var scrollBreakContainer: LinearLayout
+    private lateinit var scrollBreakTimerView: TextView
+    private lateinit var headerHeartView: FocusHeartView
+    private lateinit var heroHeartView: FocusHeartView
     private val diagnosticHandler = Handler(Looper.getMainLooper())
     private val appMetadataExecutor = Executors.newSingleThreadExecutor()
     private var installedTrackedAppsCache: List<InstalledTrackedApp>? = null
@@ -281,6 +285,23 @@ class MainActivity : android.app.Activity() {
             } else {
                 "One calm, intentional stretch. You’ve got this."
             }
+            if (::scrollBreakContainer.isInitialized) {
+                if (focusSession.isPaused && focusSession.reminderAtMillis > 0L) {
+                    scrollBreakContainer.visibility = View.VISIBLE
+                    scrollBreakTimerView.text = formatBreakCountdown(focusSession.reminderAtMillis)
+                } else {
+                    scrollBreakContainer.visibility = View.GONE
+                }
+            }
+            val completedSeconds = repository.todayFocusSeconds()
+            val targetMin = repository.dailyFocusTargetMinutes()
+            val fraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+            if (::headerHeartView.isInitialized) {
+                headerHeartView.fillFraction = fraction
+            }
+            if (::heroHeartView.isInitialized) {
+                heroHeartView.fillFraction = fraction
+            }
             diagnosticHandler.postDelayed(this, FOCUS_TIMER_REFRESH_MILLIS)
         }
     }
@@ -351,11 +372,21 @@ class MainActivity : android.app.Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         brandRow.addView(TextView(this).apply {
-            text = "SCROLL STARVA"
+            text = brandTitleText()
             textSize = 12f
             letterSpacing = .18f
             setTextColor(CORAL_DARK)
         }, LinearLayout.LayoutParams(0, -2, 1f))
+        headerHeartView = FocusHeartView(this).apply {
+            val completedSeconds = repository.todayFocusSeconds()
+            val targetMin = repository.dailyFocusTargetMinutes()
+            fillFraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+            contentDescription = "Mindful Focus Heart. Tap to view progress or start focus timer."
+            setOnClickListener { showFocusHeartPopup() }
+        }
+        brandRow.addView(headerHeartView, LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+            marginEnd = dp(10)
+        })
         buddyView = FloatingBuddyView().apply {
             contentDescription = "Pip, your friendly progress buddy. Tap for encouragement."
             setOnClickListener { cheerBuddy() }
@@ -447,7 +478,7 @@ class MainActivity : android.app.Activity() {
             setBackgroundColor(CREAM)
         }
         root.addView(TextView(this).apply {
-            text = "SCROLL STARVA"
+            text = brandTitleText()
             textSize = 13f
             letterSpacing = .18f
             setTextColor(CORAL_DARK)
@@ -1064,64 +1095,236 @@ class MainActivity : android.app.Activity() {
         else -> recapSuggestion(recap)
     }
 
+    private fun showFocusDurationPickerDialog() {
+        var dialog: Dialog? = null
+        val durationPicker = FocusDurationPicker(
+            this,
+            repository.defaultFocusMinutes() * 60_000L
+        )
+        val view = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            background = roundedBackground(CREAM, dp(20).toFloat())
+
+            addView(TextView(this@MainActivity).apply {
+                text = "START FOCUS SESSION"
+                textSize = 12f
+                letterSpacing = 0.14f
+                setTextColor(CORAL_DARK)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+            })
+
+            addView(TextView(this@MainActivity).apply {
+                text = "Choose focus duration"
+                textSize = 20f
+                setTextColor(INK)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(6), 0, dp(12))
+            })
+
+            addView(durationPicker)
+
+            addView(actionButton("Start Timer") {
+                dialog?.dismiss()
+                repository.startFocusSession(
+                    durationPicker.durationMillis,
+                    FocusSessionQuotes.random()
+                )
+                showFocusScreen(checkNotNull(repository.activeFocusSession()))
+            }, LinearLayout.LayoutParams(-1, -2).apply {
+                topMargin = dp(16)
+            })
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setView(view)
+            .create()
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog.show()
+    }
+
+    private fun showFocusHeartPopup() {
+        val completedSeconds = repository.todayFocusSeconds()
+        val completedMin = completedSeconds / 60
+        val targetMin = repository.dailyFocusTargetMinutes()
+        val fraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+        val percent = (fraction * 100).toInt()
+
+        val messages = listOf(
+            "Take a focus break and fill your heart with mindfulness! 💚",
+            "Every minute of intentional focus brings calm and clarity to your day.",
+            "Give your mind room to breathe. Ready to add green liquid to your heart?",
+            "Small moments of presence build a peaceful mind. Start a timer!",
+            "Be productive today to fill your heart with focus and peace."
+        )
+        val selectedMessage = messages[(completedMin % messages.size).toInt()]
+
+        var dialog: Dialog? = null
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            background = roundedBackground(CREAM, dp(20).toFloat())
+
+            val popupHeart = FocusHeartView(this@MainActivity).apply {
+                fillFraction = fraction
+            }
+            addView(popupHeart, LinearLayout.LayoutParams(dp(80), dp(80)).apply {
+                bottomMargin = dp(16)
+            })
+
+            addView(TextView(this@MainActivity).apply {
+                text = "YOUR MINDFUL HEART"
+                textSize = 12f
+                letterSpacing = 0.14f
+                setTextColor(CORAL_DARK)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+            })
+
+            addView(TextView(this@MainActivity).apply {
+                text = selectedMessage
+                textSize = 16f
+                setTextColor(INK)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(10), 0, dp(12))
+            })
+
+            addView(TextView(this@MainActivity).apply {
+                text = "Today's Focus: ${completedMin}m / ${targetMin}m ($percent% filled)"
+                textSize = 13f
+                setTextColor(MUTED)
+                gravity = Gravity.CENTER
+                setPadding(0, 0, 0, dp(20))
+            })
+
+            addView(actionButton("Start Focus Session") {
+                dialog?.dismiss()
+                showFocusDurationPickerDialog()
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .create()
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog.show()
+    }
+
     private fun showFocusScreen(focusSession: FocusSession) {
         focusMode = true
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(28), dp(32), dp(28), dp(32))
+            setPadding(dp(24), dp(20), dp(24), dp(20))
             setBackgroundColor(CREAM)
         }
         root.addView(TextView(this).apply {
-            text = "SCROLL STARVA"
-            textSize = 13f
+            text = brandTitleText()
+            textSize = 12f
             letterSpacing = .18f
             setTextColor(CORAL_DARK)
             gravity = Gravity.CENTER
         })
+
+        heroHeartView = FocusHeartView(this).apply {
+            val completedSeconds = repository.todayFocusSeconds()
+            val targetMin = repository.dailyFocusTargetMinutes()
+            fillFraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+        }
+        root.addView(heroHeartView, LinearLayout.LayoutParams(dp(160), dp(160)).apply {
+            topMargin = dp(16)
+            bottomMargin = dp(12)
+        })
+
         root.addView(TextView(this).apply {
             text = "Your focus time"
-            textSize = 29f
+            textSize = 22f
             setTextColor(INK)
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(0, dp(38), 0, dp(4))
         })
+
         root.addView(TextView(this).apply {
             text = if (focusSession.isPaused) {
                 "Focus paused during your short scroll break."
             } else {
                 "One calm, intentional stretch. You’ve got this."
             }
-            textSize = 15f
+            textSize = 13f
             setTextColor(MUTED)
             gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, dp(2))
         }.also { focusStatusView = it })
+
         focusTimerView = TextView(this).apply {
             text = formatFocusCountdown(focusSession)
-            textSize = 68f
+            textSize = 32f
             setTextColor(CORAL_DARK)
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(0, dp(36), 0, dp(28))
+            setPadding(0, dp(4), 0, dp(8))
         }
         root.addView(focusTimerView)
-        root.addView(card {
-            addView(label("A NOTE TO CARRY WITH YOU", CORAL_DARK, 12f))
+
+        scrollBreakContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            background = roundedBackground(Color.parseColor("#FFF3F0"), dp(16).toFloat())
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(12)
+            }
+            visibility = if (focusSession.isPaused && focusSession.reminderAtMillis > 0L) View.VISIBLE else View.GONE
+
             addView(TextView(this@MainActivity).apply {
-                text = "“${focusSession.quote}”"
+                text = "☕ SCROLL BREAK ACTIVE"
+                textSize = 11f
+                letterSpacing = 0.12f
+                setTextColor(CORAL_DARK)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+            })
+            scrollBreakTimerView = TextView(this@MainActivity).apply {
+                text = formatBreakCountdown(focusSession.reminderAtMillis)
                 textSize = 20f
                 setTextColor(INK)
                 setTypeface(typeface, Typeface.BOLD)
-                setPadding(0, dp(10), 0, dp(4))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(2), 0, dp(2))
+            }
+            addView(scrollBreakTimerView)
+            addView(TextView(this@MainActivity).apply {
+                text = "Enjoy your break! Focus will automatically resume when timer reaches 00:00."
+                textSize = 11f
+                setTextColor(MUTED)
+                gravity = Gravity.CENTER
+            })
+        }
+        root.addView(scrollBreakContainer)
+
+        root.addView(card {
+            addView(label("A NOTE TO CARRY WITH YOU", CORAL_DARK, 11f))
+            addView(TextView(this@MainActivity).apply {
+                text = "“${focusSession.quote}”"
+                textSize = 16f
+                setTextColor(INK)
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, dp(6), 0, dp(2))
             })
         })
+
         root.addView(actionButton("End focus early") { leaveFocusMode() }.apply {
             setTextColor(CORAL_DARK)
             background = roundedBackground(Color.WHITE, dp(12).toFloat())
         }, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(24)
+            topMargin = dp(16)
         })
+
         setContentView(root)
         if (activityResumed) {
             diagnosticHandler.removeCallbacks(focusTimerRefresh)
@@ -1154,6 +1357,14 @@ class MainActivity : android.app.Activity() {
         } else {
             String.format(Locale.US, "%02d:%02d", minutes, seconds)
         }
+    }
+
+    private fun formatBreakCountdown(reminderAtMillis: Long): String {
+        val remainingMillis = (reminderAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+        val remainingSeconds = (remainingMillis + 999L) / 1_000L
+        val minutes = remainingSeconds / 60L
+        val seconds = remainingSeconds % 60L
+        return String.format(Locale.US, "%02d:%02d remaining", minutes, seconds)
     }
 
     private fun renderTab() {
@@ -2478,6 +2689,17 @@ class MainActivity : android.app.Activity() {
             setColor(color)
             cornerRadius = radius
         }
+
+    private fun appVersionName(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName?.trim().orEmpty()
+    } catch (_: Exception) {
+        ""
+    }
+
+    private fun brandTitleText(): String {
+        val version = appVersionName()
+        return if (version.isNotBlank()) "SCROLL STARVA · v$version" else "SCROLL STARVA"
+    }
 
     private fun isAccessibilityEnabled(): Boolean =
         Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
