@@ -293,7 +293,7 @@ class MainActivity : android.app.Activity() {
             }
             val completedSeconds = repository.todayFocusSeconds()
             val targetMin = repository.dailyFocusTargetMinutes()
-            val fraction = maxOf(0.50f, (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f))
+            val fraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
             if (::headerHeartView.isInitialized) {
                 headerHeartView.fillFraction = fraction
             }
@@ -378,7 +378,7 @@ class MainActivity : android.app.Activity() {
         headerHeartView = FocusHeartView(this).apply {
             val completedSeconds = repository.todayFocusSeconds()
             val targetMin = repository.dailyFocusTargetMinutes()
-            fillFraction = maxOf(0.50f, (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f))
+            fillFraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
             showBubbles = false
             contentDescription = "Mindful Focus Heart. Tap to view progress or start focus timer."
             setOnClickListener { showFocusHeartPopup() }
@@ -1149,7 +1149,7 @@ class MainActivity : android.app.Activity() {
         val completedSeconds = repository.todayFocusSeconds()
         val completedMin = completedSeconds / 60
         val targetMin = repository.dailyFocusTargetMinutes()
-        val fraction = maxOf(0.50f, (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f))
+        val fraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
         val percent = (fraction * 100).toInt()
 
         val messages = listOf(
@@ -1234,7 +1234,7 @@ class MainActivity : android.app.Activity() {
         heroHeartView = FocusHeartView(this).apply {
             val completedSeconds = repository.todayFocusSeconds()
             val targetMin = repository.dailyFocusTargetMinutes()
-            fillFraction = maxOf(0.50f, (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f))
+            fillFraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
             showBubbles = true
         }
         root.addView(heroHeartView, LinearLayout.LayoutParams(dp(160), dp(160)).apply {

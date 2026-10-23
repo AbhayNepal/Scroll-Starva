@@ -23,7 +23,7 @@ class FocusHeartView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     /** Fraction of daily focus target completed, between 0.0f and 1.0f. */
-    var fillFraction: Float = 0.50f
+    var fillFraction: Float = 0.0f
         set(value) {
             field = value.coerceIn(0f, 1f)
             postInvalidateOnAnimation()
@@ -257,8 +257,8 @@ class FocusHeartView @JvmOverloads constructor(
             }
         }
 
-        // 6. Draw Empty Heart Fountain Nozzle Spray Particles (when fill is low/empty)
-        if (fillFraction < 0.25f) {
+        // 6. Draw Empty Heart Fountain Nozzle Spray Particles (Only on focus timer screen when showBubbles is true and when fill is low/empty)
+        if (showBubbles && fillFraction < 0.25f) {
             val nozzleY = bottomY - dp(2f)
             for (p in sprayParticles) {
                 p.life -= deltaSec
