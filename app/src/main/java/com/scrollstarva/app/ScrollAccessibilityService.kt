@@ -171,10 +171,8 @@ class ScrollAccessibilityService : AccessibilityService() {
                 startTracking(packageName)
                 showFocusInterruptionPrompt()
                 return
-            } else if (focusSession.isPaused) {
-                // On scroll break -> allow browsing during break without prompt
-                return
             }
+            // On scroll break (focusSession.isPaused) -> allow browsing during break without prompt
         }
 
         val appForegroundEvent = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
