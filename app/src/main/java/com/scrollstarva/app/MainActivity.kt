@@ -164,8 +164,11 @@ class MainActivity : android.app.Activity() {
     private lateinit var buddyView: FloatingBuddyView
     private lateinit var snapshot: TrackingSnapshot
     private var focusMode = false
+    private var isFastSpeedEnabled = false
+    private var lastFocusTickNanos = 0L
     private lateinit var focusTimerView: TextView
     private lateinit var focusStatusView: TextView
+    private lateinit var fastSpeedButton: TextView
     private lateinit var scrollBreakContainer: LinearLayout
     private lateinit var scrollBreakTimerView: TextView
     private lateinit var headerHeartView: FocusHeartView
@@ -271,22 +274,40 @@ class MainActivity : android.app.Activity() {
 
     private val focusTimerRefresh = object : Runnable {
         override fun run() {
-            if (!focusMode || !activityResumed) return
+            if (!focusMode || !activityResumed) {
+                lastFocusTickNanos = 0L
+                return
+            }
+            val nowNanos = System.nanoTime()
             val focusSession = repository.activeFocusSession()
             if (focusSession == null) {
+                lastFocusTickNanos = 0L
                 leaveFocusMode()
                 return
             }
-            focusTimerView.text = formatFocusCountdown(focusSession)
-            focusStatusView.text = if (focusSession.isPaused) {
+            if (lastFocusTickNanos > 0L && isFastSpeedEnabled && !focusSession.isPaused) {
+                val realDeltaMs = ((nowNanos - lastFocusTickNanos) / 1_000_000L).coerceIn(1L, 500L)
+                val extraMs = (30L - 1L) * realDeltaMs
+                repository.advanceFocusEndsAt(extraMs)
+            }
+            lastFocusTickNanos = nowNanos
+
+            val activeSession = repository.activeFocusSession() ?: run {
+                lastFocusTickNanos = 0L
+                leaveFocusMode()
+                return
+            }
+
+            focusTimerView.text = formatFocusCountdown(activeSession)
+            focusStatusView.text = if (activeSession.isPaused) {
                 "Focus paused during your short scroll break."
             } else {
                 "One calm, intentional stretch. You’ve got this."
             }
             if (::scrollBreakContainer.isInitialized) {
-                if (focusSession.isPaused && focusSession.reminderAtMillis > 0L) {
+                if (activeSession.isPaused && activeSession.reminderAtMillis > 0L) {
                     scrollBreakContainer.visibility = View.VISIBLE
-                    scrollBreakTimerView.text = formatBreakCountdown(focusSession.reminderAtMillis)
+                    scrollBreakTimerView.text = formatBreakCountdown(activeSession.reminderAtMillis)
                 } else {
                     scrollBreakContainer.visibility = View.GONE
                 }
@@ -298,7 +319,7 @@ class MainActivity : android.app.Activity() {
                 headerHeartView.fillFraction = fraction
             }
             if (::heroHeartView.isInitialized) {
-                heroHeartView.fillFraction = fraction
+                heroHeartView.fillFraction = activeSession.progressFraction
             }
             diagnosticHandler.postDelayed(this, FOCUS_TIMER_REFRESH_MILLIS)
         }
@@ -1232,9 +1253,7 @@ class MainActivity : android.app.Activity() {
         })
 
         heroHeartView = FocusHeartView(this).apply {
-            val completedSeconds = repository.todayFocusSeconds()
-            val targetMin = repository.dailyFocusTargetMinutes()
-            fillFraction = (completedSeconds.toFloat() / (targetMin * 60f)).coerceIn(0f, 1f)
+            fillFraction = focusSession.progressFraction
             showBubbles = true
         }
         root.addView(heroHeartView, LinearLayout.LayoutParams(dp(160), dp(160)).apply {
@@ -1268,9 +1287,35 @@ class MainActivity : android.app.Activity() {
             setTextColor(CORAL_DARK)
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(8))
+            setPadding(0, dp(4), 0, dp(2))
         }
         root.addView(focusTimerView)
+
+        fastSpeedButton = TextView(this).apply {
+            text = if (isFastSpeedEnabled) "⚡ 30x Fast ON" else "⚡ 30x Fast OFF"
+            textSize = 12f
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = roundedBackground(
+                if (isFastSpeedEnabled) Color.parseColor("#D1FAE5") else Color.parseColor("#F3F4F6"),
+                dp(12).toFloat()
+            )
+            setTextColor(if (isFastSpeedEnabled) Color.parseColor("#065F46") else Color.parseColor("#4B5563"))
+            setOnClickListener {
+                isFastSpeedEnabled = !isFastSpeedEnabled
+                text = if (isFastSpeedEnabled) "⚡ 30x Fast ON" else "⚡ 30x Fast OFF"
+                background = roundedBackground(
+                    if (isFastSpeedEnabled) Color.parseColor("#D1FAE5") else Color.parseColor("#F3F4F6"),
+                    dp(12).toFloat()
+                )
+                setTextColor(if (isFastSpeedEnabled) Color.parseColor("#065F46") else Color.parseColor("#4B5563"))
+            }
+        }
+//        root.addView(fastSpeedButton, LinearLayout.LayoutParams(-2, -2).apply {
+//            gravity = Gravity.CENTER_HORIZONTAL
+//            bottomMargin = dp(8)
+//        })
 
         scrollBreakContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1337,6 +1382,8 @@ class MainActivity : android.app.Activity() {
         diagnosticHandler.removeCallbacks(focusTimerRefresh)
         repository.endFocusSession()
         focusMode = false
+        isFastSpeedEnabled = false
+        lastFocusTickNanos = 0L
         snapshot = repository.snapshot()
         setContentView(buildScreen())
         refresh()
@@ -2736,7 +2783,7 @@ class MainActivity : android.app.Activity() {
         const val DIAGNOSTIC_REFRESH_MILLIS = 750L
 
         /** Interval in milliseconds for updating active focus timer countdown. */
-        const val FOCUS_TIMER_REFRESH_MILLIS = 1_000L
+        const val FOCUS_TIMER_REFRESH_MILLIS = 200L
 
         /** Duration in milliseconds for flame animation cycles. */
         const val FIRE_ANIMATION_MILLIS = 850L

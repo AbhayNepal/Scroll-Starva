@@ -80,12 +80,21 @@ enum class DailyLimitType {
  */
 data class FocusSession(
     val endsAtMillis: Long,
+    val durationMillis: Long = 0L,
     val quote: String,
     val pausedRemainingMillis: Long = 0L,
     val reminderAtMillis: Long = 0L
 ) {
     /** True if the focus session is currently paused for a scroll break. */
     val isPaused: Boolean get() = pausedRemainingMillis > 0L
+
+    /** Active focus session progress from 0.0f to 1.0f. */
+    val progressFraction: Float
+        get() {
+            if (durationMillis <= 0L) return 0f
+            val remaining = if (isPaused) pausedRemainingMillis else (endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+            return (1f - (remaining.toFloat() / durationMillis.toFloat())).coerceIn(0f, 1f)
+        }
 }
 
 /**
@@ -314,7 +323,7 @@ class TrackingRepository(context: Context) {
         }
         val activeSession = activeFocusSession()
         val activeElapsed = if (activeSession != null && !activeSession.isPaused) {
-            val totalSessionMillis = defaultFocusMinutes() * 60_000L
+            val totalSessionMillis = if (activeSession.durationMillis > 0L) activeSession.durationMillis else defaultFocusMinutes() * 60_000L
             val remainingMillis = (activeSession.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
             ((totalSessionMillis - remainingMillis) / 1_000L).coerceAtLeast(0L)
         } else {
@@ -593,9 +602,14 @@ class TrackingRepository(context: Context) {
     /** Starts a new focus session for the specified duration and quote. */
     fun startFocusSession(durationMillis: Long, quote: String): FocusSession {
         require(durationMillis > 0) { "Focus duration must be positive" }
-        val focusSession = FocusSession(System.currentTimeMillis() + durationMillis, quote)
+        val focusSession = FocusSession(
+            endsAtMillis = System.currentTimeMillis() + durationMillis,
+            durationMillis = durationMillis,
+            quote = quote
+        )
         preferences.edit()
             .putLong(KEY_FOCUS_ENDS_AT, focusSession.endsAtMillis)
+            .putLong(KEY_FOCUS_DURATION_MILLIS, focusSession.durationMillis)
             .putString(KEY_FOCUS_QUOTE, focusSession.quote)
             .remove(KEY_REPEAT_BREAK_REMINDER_AT)
             .remove(KEY_FOCUS_PAUSED_REMAINING)
@@ -608,17 +622,29 @@ class TrackingRepository(context: Context) {
     fun activeFocusSession(): FocusSession? {
         val endsAtMillis = preferences.getLong(KEY_FOCUS_ENDS_AT, 0L)
         val pausedRemainingMillis = preferences.getLong(KEY_FOCUS_PAUSED_REMAINING, 0L)
+        val durationMillis = preferences.getLong(KEY_FOCUS_DURATION_MILLIS, defaultFocusMinutes() * 60_000L)
         if (pausedRemainingMillis <= 0L && endsAtMillis <= System.currentTimeMillis()) {
 //            endFocusSession()
             return null
         }
         return FocusSession(
             endsAtMillis = endsAtMillis,
+            durationMillis = durationMillis,
             quote = preferences.getString(KEY_FOCUS_QUOTE, null)
                 ?: FocusSessionQuotes.random(),
             pausedRemainingMillis = pausedRemainingMillis,
             reminderAtMillis = preferences.getLong(KEY_FOCUS_REMINDER_AT, 0L)
         )
+    }
+
+    /** Accelerates active focus session by subtracting extra milliseconds from endsAtMillis. */
+    fun advanceFocusEndsAt(deltaMillis: Long) {
+        if (deltaMillis <= 0L) return
+        val endsAtMillis = preferences.getLong(KEY_FOCUS_ENDS_AT, 0L)
+        if (endsAtMillis > System.currentTimeMillis()) {
+            val newEndsAt = (endsAtMillis - deltaMillis).coerceAtLeast(System.currentTimeMillis())
+            preferences.edit().putLong(KEY_FOCUS_ENDS_AT, newEndsAt).apply()
+        }
     }
 
     /** Pauses active focus session for a scroll break duration in milliseconds. */
@@ -682,13 +708,14 @@ class TrackingRepository(context: Context) {
     fun endFocusSession() {
         val session = activeFocusSession()
         if (session != null && !session.isPaused) {
-            val totalSessionMillis = defaultFocusMinutes() * 60_000L
+            val totalSessionMillis = if (session.durationMillis > 0L) session.durationMillis else defaultFocusMinutes() * 60_000L
             val remainingMillis = (session.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
             val elapsedSeconds = ((totalSessionMillis - remainingMillis) / 1_000L).coerceAtLeast(0L)
             addCompletedFocusSeconds(elapsedSeconds)
         }
         preferences.edit()
             .remove(KEY_FOCUS_ENDS_AT)
+            .remove(KEY_FOCUS_DURATION_MILLIS)
             .remove(KEY_FOCUS_QUOTE)
             .remove(KEY_FOCUS_PAUSED_REMAINING)
             .remove(KEY_FOCUS_REMINDER_AT)
@@ -736,6 +763,8 @@ class TrackingRepository(context: Context) {
         const val KEY_ACTIVE_MILLIS = "active_millis"
         /** Key storing epoch end-timestamp in milliseconds for active focus session. */
         const val KEY_FOCUS_ENDS_AT = "focus_ends_at"
+        /** Key storing initial duration in milliseconds for active focus session. */
+        const val KEY_FOCUS_DURATION_MILLIS = "focus_duration_millis"
         /** Key storing motivational quote for active focus session. */
         const val KEY_FOCUS_QUOTE = "focus_quote"
         /** Key storing remaining focus milliseconds when paused for a scroll break. */
