@@ -314,6 +314,8 @@ class TrackingRepository(context: Context) {
 
     /** Returns total focus seconds completed today plus active focus session elapsed time. */
     fun todayFocusSeconds(): Long {
+        // Resolve the active session first: it may credit a just-finished session to today's total.
+        val activeSession = activeFocusSession()
         val todayStr = LocalDate.now().toString()
         val savedDate = preferences.getString(KEY_FOCUS_SECONDS_DATE, null)
         val completedSeconds = if (savedDate == todayStr) {
@@ -321,10 +323,13 @@ class TrackingRepository(context: Context) {
         } else {
             0L
         }
-        val activeSession = activeFocusSession()
-        val activeElapsed = if (activeSession != null && !activeSession.isPaused) {
+        val activeElapsed = if (activeSession != null) {
             val totalSessionMillis = if (activeSession.durationMillis > 0L) activeSession.durationMillis else defaultFocusMinutes() * 60_000L
-            val remainingMillis = (activeSession.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+            val remainingMillis = if (activeSession.isPaused) {
+                activeSession.pausedRemainingMillis
+            } else {
+                (activeSession.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+            }
             ((totalSessionMillis - remainingMillis) / 1_000L).coerceAtLeast(0L)
         } else {
             0L
@@ -624,7 +629,8 @@ class TrackingRepository(context: Context) {
         val pausedRemainingMillis = preferences.getLong(KEY_FOCUS_PAUSED_REMAINING, 0L)
         val durationMillis = preferences.getLong(KEY_FOCUS_DURATION_MILLIS, defaultFocusMinutes() * 60_000L)
         if (pausedRemainingMillis <= 0L && endsAtMillis <= System.currentTimeMillis()) {
-//            endFocusSession()
+            // A session that finished (e.g. while the app was closed) is credited and cleared here.
+            if (endsAtMillis > 0L) endFocusSession()
             return null
         }
         return FocusSession(
@@ -706,10 +712,18 @@ class TrackingRepository(context: Context) {
 
     /** Ends and clears the active focus session immediately. */
     fun endFocusSession() {
-        val session = activeFocusSession()
-        if (session != null && !session.isPaused) {
-            val totalSessionMillis = if (session.durationMillis > 0L) session.durationMillis else defaultFocusMinutes() * 60_000L
-            val remainingMillis = (session.endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+        // Read raw stored state instead of activeFocusSession(): that returns null once the
+        // timer has reached 00:00, which previously caused completed sessions to be lost.
+        val endsAtMillis = preferences.getLong(KEY_FOCUS_ENDS_AT, 0L)
+        val pausedRemainingMillis = preferences.getLong(KEY_FOCUS_PAUSED_REMAINING, 0L)
+        if (endsAtMillis > 0L || pausedRemainingMillis > 0L) {
+            val totalSessionMillis = preferences.getLong(KEY_FOCUS_DURATION_MILLIS, 0L)
+                .takeIf { it > 0L } ?: (defaultFocusMinutes() * 60_000L)
+            val remainingMillis = if (pausedRemainingMillis > 0L) {
+                pausedRemainingMillis
+            } else {
+                (endsAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+            }
             val elapsedSeconds = ((totalSessionMillis - remainingMillis) / 1_000L).coerceAtLeast(0L)
             addCompletedFocusSeconds(elapsedSeconds)
         }
