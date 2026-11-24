@@ -68,88 +68,71 @@ private data class OnboardingTourStepData(
     val cardIndex: Int
 )
 
+/**
+ * Dims the screen except for a rounded cutout around [targetView]. Pip and his speech bubble are
+ * raised above this overlay by the tour, so the overlay itself only blocks touches to the page.
+ */
 private class SpotlightTourOverlay(
     context: Context,
-    private val targetView: View?,
-    private val tooltipView: View
+    private val targetView: View?
 ) : FrameLayout(context) {
+    private val density = resources.displayMetrics.density
     private val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#D0000000")
+        color = Color.parseColor("#B8140C08")
     }
     private val cutoutPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
     }
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#F26B5E")
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+    }
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFF8EF")
+        color = Color.parseColor("#66F26B5E")
         style = Paint.Style.STROKE
-        strokeWidth = 3f * resources.displayMetrics.density
+        strokeWidth = 7f * density
     }
-    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E05236")
-        style = Paint.Style.STROKE
-        strokeWidth = 3f * resources.displayMetrics.density
-    }
+    private val rect = RectF()
+    private val startedAt = android.os.SystemClock.uptimeMillis()
 
     init {
         setLayerType(LAYER_TYPE_SOFTWARE, null)
+        setWillNotDraw(false)
         isClickable = true
         isFocusable = true
         setOnTouchListener { _, _ -> true }
-        updateTooltipPosition()
-        addView(tooltipView)
+        alpha = 0f
+        animate().alpha(1f).setDuration(220).start()
     }
 
-    fun updateTooltipPosition() {
-        val screenHeight = resources.displayMetrics.heightPixels
-        val showAtTop = if (targetView != null && targetView.isAttachedToWindow) {
-            val location = IntArray(2)
-            targetView.getLocationOnScreen(location)
-            val centerY = location[1] + targetView.height / 2
-            centerY > screenHeight / 2
-        } else {
-            false
-        }
-
-        val params = LayoutParams(-1, -2).apply {
-            gravity = if (showAtTop) Gravity.TOP or Gravity.CENTER_HORIZONTAL else Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            val sideMargin = dp(12)
-            val topMargin = if (showAtTop) dp(36) else dp(8)
-            val bottomMargin = if (showAtTop) dp(8) else dp(12)
-            setMargins(sideMargin, topMargin, sideMargin, bottomMargin)
-        }
-        tooltipView.layoutParams = params
+    override fun onDraw(canvas: Canvas) {
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), scrimPaint)
+        val target = targetView ?: return
+        if (!target.isAttachedToWindow || target.visibility != VISIBLE) return
+        val location = IntArray(2)
+        target.getLocationOnScreen(location)
+        val own = IntArray(2)
+        getLocationOnScreen(own)
+        val pad = 8f * density
+        rect.set(
+            location[0] - own[0] - pad,
+            location[1] - own[1] - pad,
+            location[0] - own[0] + target.width + pad,
+            location[1] - own[1] + target.height + pad
+        )
+        val radius = 20f * density
+        canvas.drawRoundRect(rect, radius, radius, cutoutPaint)
+        // A softly pulsing ring draws the eye to the highlighted card.
+        val pulse = ((android.os.SystemClock.uptimeMillis() - startedAt) % 1600L) / 1600f
+        glowPaint.alpha = (110 * (1f - pulse)).toInt()
+        val grow = pulse * 6f * density
+        rect.inset(-grow, -grow)
+        canvas.drawRoundRect(rect, radius + grow, radius + grow, glowPaint)
+        rect.inset(grow, grow)
+        canvas.drawRoundRect(rect, radius, radius, ringPaint)
+        postInvalidateOnAnimation()
     }
-
-    override fun dispatchDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        val h = height.toFloat()
-
-        canvas.drawRect(0f, 0f, w, h, scrimPaint)
-
-        if (targetView != null && targetView.isAttachedToWindow && targetView.visibility == VISIBLE) {
-            val location = IntArray(2)
-            targetView.getLocationOnScreen(location)
-            val overlayLocation = IntArray(2)
-            this.getLocationOnScreen(overlayLocation)
-
-            val padding = 8f * resources.displayMetrics.density
-            val left = (location[0] - overlayLocation[0]).toFloat() - padding
-            val top = (location[1] - overlayLocation[1]).toFloat() - padding
-            val right = left + targetView.width.toFloat() + (padding * 2)
-            val bottom = top + targetView.height.toFloat() + (padding * 2)
-
-            val radius = 16f * resources.displayMetrics.density
-            val targetRect = RectF(left, top, right, bottom)
-
-            canvas.drawRoundRect(targetRect, radius, radius, cutoutPaint)
-            canvas.drawRoundRect(targetRect, radius, radius, borderPaint)
-            canvas.drawRoundRect(targetRect, radius, radius, glowPaint)
-        }
-
-        super.dispatchDraw(canvas)
-    }
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
 
 class MainActivity : android.app.Activity() {
@@ -161,7 +144,9 @@ class MainActivity : android.app.Activity() {
     private lateinit var pageHeading: TextView
     private lateinit var pageSubtitle: TextView
     private lateinit var navigationBar: LinearLayout
-    private lateinit var buddyView: FloatingBuddyView
+    private lateinit var buddyView: PipView
+    private var pipCompanion: PipCompanion? = null
+    private lateinit var buddyAnchor: View
     private lateinit var snapshot: TrackingSnapshot
     private var focusMode = false
     private var isFastSpeedEnabled = false
@@ -177,7 +162,6 @@ class MainActivity : android.app.Activity() {
     private val appMetadataExecutor = Executors.newSingleThreadExecutor()
     private var installedTrackedAppsCache: List<InstalledTrackedApp>? = null
     private var selectedTab = DashboardTab.OVERVIEW
-    private var buddyMessageIndex = 0
     private var selectedAccent = CORAL
     private var activityResumed = false
     private var morningRecapDialog: Dialog? = null
@@ -189,6 +173,10 @@ class MainActivity : android.app.Activity() {
     private var onboardingScreen: View? = null
     private var onboardingFocusPicker: FocusDurationPicker? = null
     private var tourOverlayView: View? = null
+    private var onboardingSetupPage = 0
+    private var setupStage: PipStage? = null
+    private var onboardingAppList: LinearLayout? = null
+    private var accessibilitySettingsOpened = false
     private val onboardingTourSteps = listOf(
         OnboardingTourStepData(
             tab = DashboardTab.OVERVIEW,
@@ -351,11 +339,14 @@ class MainActivity : android.app.Activity() {
 
     override fun onPause() {
         activityResumed = false
+        pipCompanion?.onPause()
         diagnosticHandler.removeCallbacks(focusTimerRefresh)
         super.onPause()
     }
 
     override fun onDestroy() {
+        pipCompanion?.release()
+        setupStage?.release()
         diagnosticHandler.removeCallbacksAndMessages(null)
         appMetadataExecutor.shutdownNow()
         super.onDestroy()
@@ -366,6 +357,9 @@ class MainActivity : android.app.Activity() {
             val apps = queryInstalledTrackedApps()
             runOnUiThread {
                 installedTrackedAppsCache = apps
+                onboardingAppList?.let { list ->
+                    if (list.isAttachedToWindow) fillOnboardingAppList(list, setupStage)
+                }
                 if (!isFinishing && !isDestroyed && activityResumed &&
                     onboardingScreen == null && ::dashboardRoot.isInitialized && !focusMode
                 ) {
@@ -407,11 +401,9 @@ class MainActivity : android.app.Activity() {
         brandRow.addView(headerHeartView, LinearLayout.LayoutParams(dp(44), dp(44)).apply {
             marginEnd = dp(10)
         })
-        buddyView = FloatingBuddyView().apply {
-            contentDescription = "Pip, your friendly progress buddy. Tap for encouragement."
-            setOnClickListener { cheerBuddy() }
-        }
-        brandRow.addView(buddyView, LinearLayout.LayoutParams(dp(64), dp(64)))
+        // Pip itself lives in an overlay above the dashboard (so it can fly); this is its perch.
+        buddyAnchor = View(this)
+        brandRow.addView(buddyAnchor, LinearLayout.LayoutParams(dp(64), dp(64)))
         header.addView(brandRow)
         pageHeading = TextView(this).apply {
             textSize = 29f
@@ -452,6 +444,9 @@ class MainActivity : android.app.Activity() {
         }
         dashboardRoot.addView(navigationBar)
         rootFrame.addView(dashboardRoot, FrameLayout.LayoutParams(-1, -1))
+        pipCompanion?.release()
+        pipCompanion = PipCompanion(this, rootFrame, buddyAnchor, headerHeartView, pipHost)
+        buddyView = checkNotNull(pipCompanion).pip
         renderTab()
         return rootFrame
     }
@@ -485,72 +480,261 @@ class MainActivity : android.app.Activity() {
             refresh()
         }
         showMorningRecapIfNeeded()
+        pipCompanion?.onAppOpened()
+    }
+
+    // =====================================================================================
+    // Onboarding: Pip guides the user through permission, a 3-step setup and a dashboard tour.
+    // =====================================================================================
+
+    /** Pieces of an onboarding page built by [onboardingScaffold]. */
+    private class OnboardingPage(
+        val root: FrameLayout,
+        val content: LinearLayout,
+        val buttons: LinearLayout,
+        val stage: PipStage
+    )
+
+    /**
+     * Shared layout for every pre-tour onboarding page, so they look like one flow:
+     * step label + progress, Pip's perch with room for his speech bubble beside him,
+     * scrolling content, and a pinned button bar.
+     */
+    private fun onboardingScaffold(stepLabel: String, stepIndex: Int?, stepCount: Int): OnboardingPage {
+        setupStage?.release()
+        val root = FrameLayout(this).apply { setBackgroundColor(CREAM) }
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(column, FrameLayout.LayoutParams(-1, -1))
+
+        column.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(20), dp(24), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = stepLabel
+                textSize = 11f
+                letterSpacing = .18f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(CORAL_DARK)
+            })
+            if (stepIndex != null) {
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    for (i in 0 until stepCount) {
+                        addView(View(this@MainActivity).apply {
+                            background = roundedBackground(
+                                if (i <= stepIndex) CORAL else Color.parseColor("#F3E3DA"),
+                                dp(3).toFloat()
+                            )
+                        }, LinearLayout.LayoutParams(0, dp(6), 1f).apply {
+                            if (i > 0) marginStart = dp(6)
+                        })
+                    }
+                }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+            }
+        })
+
+        // Pip's perch; the bubble appears to its right inside this row.
+        val anchor = View(this)
+        column.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14), dp(6), dp(14), 0)
+            addView(anchor, LinearLayout.LayoutParams(dp(96), dp(96)))
+        }, LinearLayout.LayoutParams(-1, dp(118)))
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), dp(16))
+        }
+        column.addView(ScrollView(this).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            addView(content, android.view.ViewGroup.LayoutParams(-1, -2))
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(10), dp(20), dp(18))
+        }
+        column.addView(buttons, LinearLayout.LayoutParams(-1, -2))
+
+        val stage = PipStage(this, root, anchor, pipSizeDp = 96)
+        stage.onPipTapped = {
+            stage.pip.playCheer()
+            stage.say(PipCompanion.QUOTES.random(), placement = PipStage.Placement.RIGHT)
+        }
+        setupStage = stage
+        return OnboardingPage(root, content, buttons, stage)
+    }
+
+    private fun onboardingTitle(title: String, subtitle: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(TextView(this@MainActivity).apply {
+            text = title
+            textSize = 26f
+            setTextColor(INK)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = subtitle
+            textSize = 15f
+            setTextColor(MUTED)
+            setLineSpacing(0f, 1.15f)
+            setPadding(0, dp(6), 0, dp(8))
+        })
+    }
+
+    private fun onboardingSectionLabel(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 11f
+        letterSpacing = .16f
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(CORAL_DARK)
+        setPadding(0, 0, 0, dp(8))
+    }
+
+    private fun onboardingPrimaryButton(text: String, action: () -> Unit) = actionButton(text, action).apply {
+        textSize = 16f
+        setTypeface(typeface, Typeface.BOLD)
+        background = roundedBackground(CORAL, dp(16).toFloat())
+        stateListAnimator = null
+        minHeight = dp(54)
+    }
+
+    private fun onboardingSecondaryButton(text: String, action: () -> Unit) = actionButton(text, action).apply {
+        textSize = 16f
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(CORAL_DARK)
+        background = GradientDrawable().apply {
+            setColor(Color.WHITE)
+            cornerRadius = dp(16).toFloat()
+            setStroke(dp(1), Color.parseColor("#F3C9BF"))
+        }
+        stateListAnimator = null
+        minHeight = dp(54)
+    }
+
+    private fun setOnboardingButtons(page: OnboardingPage, back: View?, next: View) {
+        page.buttons.removeAllViews()
+        if (back != null) {
+            page.buttons.addView(back, LinearLayout.LayoutParams(0, dp(54), 0.38f).apply { marginEnd = dp(10) })
+        }
+        page.buttons.addView(next, LinearLayout.LayoutParams(0, dp(54), 1f))
     }
 
     private fun showTrackingSetupScreen() {
         if (onboardingScreen?.tag == TRACKING_SETUP_TAG) {
+            // Back from Android settings without switching tracking on: Pip helps out.
+            if (accessibilitySettingsOpened) {
+                accessibilitySettingsOpened = false
+                setupStage?.let {
+                    it.pip.lookAtViewer()
+                    it.say(
+                        "Not switched on yet. Tap the button, find Scroll Starva in the list and turn it on. I'll wait! ⏳",
+                        placement = PipStage.Placement.RIGHT, autoHideMs = 9_000L
+                    )
+                }
+            }
             return
         }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(28), dp(32), dp(28), dp(32))
-            setBackgroundColor(CREAM)
-        }
-        root.addView(TextView(this).apply {
-            text = brandTitleText()
-            textSize = 13f
-            letterSpacing = .18f
-            setTextColor(CORAL_DARK)
-            gravity = Gravity.CENTER
+        val page = onboardingScaffold("WELCOME", null, 0)
+        page.content.addView(onboardingTitle(
+            "Let's switch on tracking",
+            "To notice when you're stuck in a feed, I need Android's Accessibility permission."
+        ))
+
+        page.content.addView(card {
+            addView(onboardingSectionLabel("HOW IT WORKS"))
+            listOf(
+                "👀" to "Notices which of your chosen apps is open",
+                "📏" to "Counts scrolls and time so you can see your progress",
+                "🔒" to "Everything stays on this device"
+            ).forEach { (icon, line) ->
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(5), 0, dp(5))
+                    addView(TextView(this@MainActivity).apply {
+                        text = icon
+                        textSize = 17f
+                        gravity = Gravity.CENTER
+                        background = roundedBackground(Color.parseColor("#FFF1EA"), dp(12).toFloat())
+                    }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(12) })
+                    addView(label(line, INK, 15f), LinearLayout.LayoutParams(0, -2, 1f))
+                })
+            }
         })
-        root.addView(FloatingBuddyView().apply {
-            contentDescription = "Pip, your onboarding guide"
-        }, LinearLayout.LayoutParams(dp(96), dp(96)).apply {
-            topMargin = dp(24)
-            bottomMargin = dp(24)
-            gravity = Gravity.CENTER_HORIZONTAL
-        })
-        root.addView(TextView(this).apply {
-            text = "Tracking is off"
-            textSize = 25f
-            setTextColor(INK)
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-        })
-        root.addView(TextView(this).apply {
-            text = "Scroll Starva uses Android Accessibility to read the active app and visible screen labels in the supported apps you select. This lets it identify short-form feeds, count scrolls, measure app time, and show break reminders. The activity data is stored on this device and is not sent to Scroll Starva servers."
-            textSize = 15f
-            setTextColor(MUTED)
-            setPadding(0, dp(12), 0, dp(12))
-        })
-        val disclosureConsent = CheckBox(this).apply {
+
+        lateinit var consentRow: View
+        val consent = CheckBox(this).apply {
             text = "I understand and consent to this on-device tracking."
-            textSize = 14f
+            textSize = 15f
             setTextColor(INK)
-            setPadding(0, dp(4), 0, dp(12))
+            buttonTintList = android.content.res.ColorStateList.valueOf(CORAL)
+            setPadding(dp(6), dp(4), 0, dp(4))
         }
-        val trackingButton = actionButton("Continue to accessibility settings") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }.apply {
-            isEnabled = false
-            alpha = .55f
-        }
-        disclosureConsent.setOnCheckedChangeListener { _, checked ->
-            trackingButton.isEnabled = checked
-            trackingButton.alpha = if (checked) 1f else .55f
-        }
-        root.addView(disclosureConsent)
-        root.addView(trackingButton, LinearLayout.LayoutParams(-1, -2))
-        root.addView(TextView(this).apply {
-            text = "If Android says \"Restricted setting\": Go to device Settings → Apps → Scroll Starva → tap 3 dots (top-right) → \"Allow restricted settings\"."
-            textSize = 12f
-            setTextColor(MUTED)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, 0)
+        page.content.addView(card {
+            addView(onboardingSectionLabel("YOUR PRIVACY"))
+            addView(label(
+                "Scroll Starva uses Android Accessibility to read the active app and visible screen labels in the supported apps you select. This lets it identify short-form feeds, count scrolls, measure app time, and show break reminders. The activity data is stored on this device and is not sent to Scroll Starva servers.",
+                MUTED,
+                13.5f
+            ).apply { setLineSpacing(0f, 1.15f) })
+            consentRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8), dp(6), dp(8), dp(6))
+                background = roundedBackground(Color.parseColor("#FFF6F1"), dp(14).toFloat())
+                addView(consent, LinearLayout.LayoutParams(-1, -2))
+            }
+            addView(consentRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
         })
-        onboardingScreen = root.apply { tag = TRACKING_SETUP_TAG }
-        setContentView(root)
+
+        page.content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = roundedBackground(Color.parseColor("#F4EFE8"), dp(14).toFloat())
+            addView(label("💡", INK, 15f), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
+            addView(label(
+                "If Android says \"Restricted setting\": open Settings → Apps → Scroll Starva → ⋮ (top right) → Allow restricted settings, then try again.",
+                MUTED,
+                13f
+            ), LinearLayout.LayoutParams(0, -2, 1f))
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+
+        val continueButton = onboardingPrimaryButton("Continue to accessibility settings") {
+            if (!consent.isChecked) {
+                page.stage.pointOut(consentRow, "Tick this box first, so I know you're okay with it 🙂")
+                return@onboardingPrimaryButton
+            }
+            accessibilitySettingsOpened = true
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }.apply { alpha = .6f }
+        consent.setOnCheckedChangeListener { _, checked ->
+            continueButton.alpha = if (checked) 1f else .6f
+            if (checked) {
+                page.stage.pip.playCheer()
+                page.stage.say("Thank you! 💛 Now tap the button below and switch me on.", placement = PipStage.Placement.RIGHT)
+            } else {
+                page.stage.pip.lookAtViewer()
+                page.stage.say("That's okay. Take your time.", placement = PipStage.Placement.RIGHT)
+            }
+        }
+        setOnboardingButtons(page, null, continueButton)
+
+        onboardingScreen = page.root.apply { tag = TRACKING_SETUP_TAG }
+        setContentView(page.root)
+        page.stage.postDelayed(500) {
+            page.stage.pip.wave(1.8f)
+            page.stage.say("Hi, I'm Pip! 👋 I'll help you scroll less and live more.", placement = PipStage.Placement.RIGHT) {
+                page.stage.postDelayed(300) {
+                    page.stage.say(
+                        "First, I need your OK to notice when a feed is open.",
+                        placement = PipStage.Placement.RIGHT, autoHideMs = 0L
+                    )
+                }
+            }
+        }
     }
 
     private fun showOnboardingScreen() {
@@ -560,111 +744,230 @@ class MainActivity : android.app.Activity() {
         }
     }
 
+    /** Three short setup pages: apps → focus length → break reminder. */
     private fun showOnboardingSettings() {
-        val root = onboardingRoot()
-        root.addView(FloatingBuddyView().apply {
-            contentDescription = "Pip is helping you set your starting timers"
-            setOnClickListener {
-                playCheer()
-                Toast.makeText(
-                    this@MainActivity,
-                    "Choose a focus duration and a gentle feed-break reminder.",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }, LinearLayout.LayoutParams(dp(80), dp(80)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-        })
-        root.addView(TextView(this).apply {
-            text = "Let’s set your starting timers"
-            textSize = 25f
-            setTextColor(INK)
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(8))
-        })
-        root.addView(TextView(this).apply {
-            text = "You can change these any time. The break reminder is when Pip gently checks in during a long feed session."
-            textSize = 15f
-            setTextColor(MUTED)
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(12))
-        })
-        root.addView(card {
-            addView(label("APPS TO TRACK", CORAL_DARK, 12f))
-            addView(label(
-                "Choose which supported apps count toward your time, goals, and scroll totals.",
-                MUTED,
-                14f
-            ).apply { setPadding(0, dp(6), 0, dp(8)) })
-            addView(ScrollView(this@MainActivity).apply {
-                isFillViewport = true
-                isVerticalScrollBarEnabled = true
-                setOnTouchListener { v, event ->
-                    when (event.actionMasked) {
-                        android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
-                            v.parent?.requestDisallowInterceptTouchEvent(true)
-                        }
-                        android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                            v.parent?.requestDisallowInterceptTouchEvent(false)
-                        }
-                    }
-                    false
-                }
-                addView(appSelectionRows(onboardingSelectedPackages))
-            }, LinearLayout.LayoutParams(-1, dp(260)))
-        })
-        root.addView(card {
-            addView(label("DEFAULT FOCUS TIME", CORAL_DARK, 12f))
-            val focusPicker = FocusDurationPicker(
-                this@MainActivity,
-                onboardingFocusMinutes * 60_000L
-            )
-            addView(focusPicker)
-            onboardingFocusPicker = focusPicker
-        })
-        root.addView(card {
-            addView(label("BREAK REMINDER", CORAL_DARK, 12f))
-            val currentMinutes = onboardingMarathonMinutes
-            val reminderLabel = label("Remind me after $currentMinutes minutes", INK, 15f)
-            addView(reminderLabel)
-            addView(SeekBar(this@MainActivity).apply {
-                max = TrackingTimerSettings.MAX_MARATHON_MINUTES -
-                    TrackingTimerSettings.MIN_MARATHON_MINUTES
-                progress = onboardingMarathonMinutes - TrackingTimerSettings.MIN_MARATHON_MINUTES
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                        onboardingMarathonMinutes =
-                            progress + TrackingTimerSettings.MIN_MARATHON_MINUTES
-                        reminderLabel.text = "Remind me after $onboardingMarathonMinutes minutes"
-                    }
+        val pageIndex = onboardingSetupPage.coerceIn(0, 2)
+        val page = onboardingScaffold("SETUP · STEP ${pageIndex + 1} OF 3", pageIndex, 3)
+        onboardingAppList = null
+        val stage = page.stage
+        fun pipSays(text: String, keep: Boolean = false) =
+            stage.say(text, placement = PipStage.Placement.RIGHT, autoHideMs = if (keep) 0L else null)
 
-                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                    override fun onStopTrackingTouch(seekBar: SeekBar) = Unit
+        val back = if (pageIndex > 0) onboardingSecondaryButton("Back") {
+            onboardingSetupPage = pageIndex - 1
+            showOnboardingSettings()
+        } else null
+
+        when (pageIndex) {
+            0 -> {
+                page.content.addView(onboardingTitle(
+                    "Which apps should I watch?",
+                    "Pick the feeds that pull you in. They'll count toward your time, goals and scroll totals."
+                ))
+                val listCard = card { }
+                val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                listCard.addView(list)
+                page.content.addView(listCard)
+                onboardingAppList = list
+                fillOnboardingAppList(list, stage)
+                setOnboardingButtons(page, null, onboardingPrimaryButton("Next") {
+                    if (onboardingSelectedPackages.isEmpty()) {
+                        stage.pointOut(listCard, "Pick at least one app, so I have something to keep an eye on!")
+                        return@onboardingPrimaryButton
+                    }
+                    repository.setSelectedPackages(onboardingSelectedPackages)
+                    onboardingSetupPage = 1
+                    showOnboardingSettings()
                 })
-            })
-            addView(label(
-                "${TrackingTimerSettings.MIN_MARATHON_MINUTES}–" +
-                    "${TrackingTimerSettings.MAX_MARATHON_MINUTES} minutes",
-                MUTED,
-                12f
-            ))
-        })
-        root.addView(actionButton("Continue with these timers") {
-            val picker = onboardingFocusPicker
-                ?: error("Focus duration picker is missing from onboarding")
-            onboardingFocusMinutes = (picker.durationMillis / 60_000L).toInt()
-            repository.setDefaultFocusMinutes(onboardingFocusMinutes)
-            repository.setMarathonMinutes(onboardingMarathonMinutes)
-            if (onboardingSelectedPackages.isEmpty()) {
-                Toast.makeText(this, "Select at least one app to track", Toast.LENGTH_SHORT).show()
-                return@actionButton
+                stage.postDelayed(450) {
+                    stage.pip.wave(1.4f)
+                    pipSays("Tick the apps that steal your time. I'll keep an eye on them 👀", keep = true)
+                }
             }
-            repository.setSelectedPackages(onboardingSelectedPackages)
-            onboardingTourStep = 0
-            showOnboardingTourStep()
-        })
-        showOnboardingContent(root)
+            1 -> {
+                page.content.addView(onboardingTitle(
+                    "How long do you like to focus?",
+                    "This is your default focus session. You can still pick a different length each time."
+                ))
+                val picker = FocusDurationPicker(this, onboardingFocusMinutes * 60_000L)
+                page.content.addView(card {
+                    addView(onboardingSectionLabel("DEFAULT FOCUS TIME"))
+                    addView(picker)
+                })
+                var pendingReaction: Runnable? = null
+                picker.onDurationChanged = { millis ->
+                    onboardingFocusMinutes = (millis / 60_000L).toInt()
+                    pendingReaction?.let { diagnosticHandler.removeCallbacks(it) }
+                    pendingReaction = Runnable {
+                        val m = onboardingFocusMinutes
+                        val line = when {
+                            m < 10 -> "$m minutes? A tiny step is still a step! 🐣"
+                            m < 20 -> "$m minutes. Short and sweet!"
+                            m in 20..30 -> "$m minutes. The classic. Nice choice! 🍅"
+                            m <= 60 -> "$m minutes of deep work? Love it! 💪"
+                            else -> "Whoa, ${m / 60}h ${m % 60}m! Remember to stretch 🧘"
+                        }
+                        stage.pip.hop()
+                        pipSays(line)
+                    }.also { diagnosticHandler.postDelayed(it, 650) }
+                }
+                setOnboardingButtons(page, back, onboardingPrimaryButton("Next") {
+                    repository.setDefaultFocusMinutes(onboardingFocusMinutes)
+                    onboardingSetupPage = 2
+                    showOnboardingSettings()
+                })
+                stage.postDelayed(450) {
+                    pipSays(
+                        if (onboardingFocusMinutes == 25) "25 minutes is a classic. Spin the wheels to choose yours!"
+                        else "Spin the wheels to pick your focus length. Not sure? 25 minutes is a classic!",
+                        keep = true
+                    )
+                }
+            }
+            else -> {
+                page.content.addView(onboardingTitle(
+                    "When should I check in?",
+                    "If you've been in a feed nonstop for this long, I'll gently remind you to take a break."
+                ))
+                val value = TextView(this).apply {
+                    textSize = 34f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(CORAL_DARK)
+                    gravity = Gravity.CENTER
+                }
+                fun showValue() { value.text = "$onboardingMarathonMinutes min" }
+                showValue()
+                page.content.addView(card {
+                    addView(onboardingSectionLabel("BREAK REMINDER"))
+                    addView(value, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                    addView(SeekBar(this@MainActivity).apply {
+                        max = TrackingTimerSettings.MAX_MARATHON_MINUTES - TrackingTimerSettings.MIN_MARATHON_MINUTES
+                        progress = onboardingMarathonMinutes - TrackingTimerSettings.MIN_MARATHON_MINUTES
+                        progressTintList = android.content.res.ColorStateList.valueOf(CORAL)
+                        thumbTintList = android.content.res.ColorStateList.valueOf(CORAL)
+                        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                                onboardingMarathonMinutes = progress + TrackingTimerSettings.MIN_MARATHON_MINUTES
+                                showValue()
+                            }
+
+                            override fun onStartTrackingTouch(seekBar: SeekBar) {
+                                stage.pip.lookToward(0f, 1f)
+                            }
+
+                            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                                val m = onboardingMarathonMinutes
+                                stage.pip.hop()
+                                pipSays(when {
+                                    m <= 10 -> "Ooh, strict! I'll be quick to tap your shoulder."
+                                    m <= 30 -> "$m minutes sounds nicely balanced 👌"
+                                    m <= 60 -> "Okay, I'll be patient. $m minutes it is."
+                                    else -> "That's a long scroll… but I'll still be here 😌"
+                                })
+                            }
+                        })
+                    })
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        addView(label("${TrackingTimerSettings.MIN_MARATHON_MINUTES} min", MUTED, 12f),
+                            LinearLayout.LayoutParams(0, -2, 1f))
+                        addView(label("${TrackingTimerSettings.MAX_MARATHON_MINUTES} min", MUTED, 12f))
+                    })
+                })
+                setOnboardingButtons(page, back, onboardingPrimaryButton("Start the tour") {
+                    repository.setDefaultFocusMinutes(onboardingFocusMinutes)
+                    repository.setMarathonMinutes(onboardingMarathonMinutes)
+                    repository.setSelectedPackages(onboardingSelectedPackages)
+                    setupStage?.release()
+                    setupStage = null
+                    onboardingTourStep = 0
+                    showOnboardingTourStep()
+                })
+                stage.postDelayed(450) {
+                    pipSays("Last one! When you've scrolled for a while, I'll gently tap your shoulder.", keep = true)
+                }
+            }
+        }
+
+        onboardingScreen = page.root
+        setContentView(page.root)
+    }
+
+    /** Fills the onboarding app list; called again once installed apps finish loading. */
+    private fun fillOnboardingAppList(list: LinearLayout, stage: PipStage?) {
+        list.removeAllViews()
+        val apps = installedTrackedAppsCache
+        if (apps == null) {
+            list.addView(label("Looking for your apps…", MUTED, 14f).apply { setPadding(0, dp(8), 0, dp(8)) })
+            return
+        }
+        if (apps.isEmpty()) {
+            list.addView(label("No supported apps were found on this phone.", MUTED, 14f))
+            return
+        }
+        // Supported short-form feeds first; everything else below.
+        val feedPackages = FeedPlatform.entries.map { it.packageName }.toSet()
+        val (feeds, others) = apps.partition { it.packageName in feedPackages }
+        val ordered = feeds + others
+        ordered.forEachIndexed { index, app ->
+            if (index == 0 && feeds.isNotEmpty()) list.addView(onboardingSectionLabel("POPULAR FEEDS"))
+            if (index == feeds.size && others.isNotEmpty()) {
+                list.addView(onboardingSectionLabel("OTHER APPS").apply {
+                    if (feeds.isNotEmpty()) setPadding(0, dp(16), 0, dp(8))
+                })
+            }
+            val check = TextView(this).apply {
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setTypeface(typeface, Typeface.BOLD)
+            }
+            fun paint(selected: Boolean) {
+                check.text = if (selected) "✓" else ""
+                check.setTextColor(Color.WHITE)
+                check.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    if (selected) setColor(CORAL) else {
+                        setColor(Color.WHITE)
+                        setStroke(dp(2), Color.parseColor("#E3D6CE"))
+                    }
+                }
+            }
+            paint(app.packageName in onboardingSelectedPackages)
+            list.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(8), dp(4), dp(8))
+                isClickable = true
+                contentDescription = app.label
+                addView(ImageView(this@MainActivity).apply {
+                    setImageDrawable(app.icon)
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(14) })
+                addView(label(app.label, INK, 16f), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(check, LinearLayout.LayoutParams(dp(26), dp(26)))
+                setOnClickListener {
+                    val selected = app.packageName !in onboardingSelectedPackages
+                    if (selected) onboardingSelectedPackages.add(app.packageName)
+                    else onboardingSelectedPackages.remove(app.packageName)
+                    paint(selected)
+                    check.animate().scaleX(1.25f).scaleY(1.25f).setDuration(110)
+                        .withEndAction { check.animate().scaleX(1f).scaleY(1f).setDuration(140).start() }
+                        .start()
+                    stage?.let { s ->
+                        val c = s.centerOf(this)
+                        val p = s.centerOf(s.pip)
+                        s.pip.lookToward(c.x - p.x, c.y - p.y)
+                        if (selected) s.pip.hop()
+                        s.say(
+                            if (selected) "Got it, I'll keep an eye on ${app.label} 👀"
+                            else "Okay, ${app.label} is off my list.",
+                            placement = PipStage.Placement.RIGHT
+                        )
+                    }
+                }
+            })
+            if (index < ordered.lastIndex && index != feeds.size - 1) list.addView(divider())
+        }
     }
 
     private fun showOnboardingTourStep() {
@@ -675,134 +978,52 @@ class MainActivity : android.app.Activity() {
         val step = onboardingTourSteps[onboardingTourStep]
 
         onboardingScreen = null
-        if (!::rootFrame.isInitialized) {
+        if (!::rootFrame.isInitialized || rootFrame.parent == null) {
             setContentView(buildScreen())
         }
 
-        if (selectedTab != step.tab) {
-            selectedTab = step.tab
-            renderTab()
-        } else {
-            renderTab()
-        }
+        selectedTab = step.tab
+        renderTab()
 
         // Lock manual user scrolling during tour
         pageScroll.setOnTouchListener { _, _ -> true }
 
         val targetView = pageContent.getChildAt(step.cardIndex)
-        pageScroll.postDelayed({
-            if (targetView != null) {
-                val targetTop = (targetView.top - dp(16)).coerceAtLeast(0)
-                pageScroll.smoothScrollTo(0, targetTop)
-            } else {
-                pageScroll.smoothScrollTo(0, 0)
-            }
-            pageScroll.postDelayed({
-                (tourOverlayView as? SpotlightTourOverlay)?.updateTooltipPosition()
-                tourOverlayView?.invalidate()
-            }, 120L)
-        }, 80L)
-
         tourOverlayView?.let { rootFrame.removeView(it) }
-
-        val tooltipCard = card {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#FFF8EF"))
-            background = roundedBackground(Color.parseColor("#FFF8EF"), dp(14).toFloat())
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-
-            lateinit var miniPip: FloatingBuddyView
-
-            val topRow = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-
-                miniPip = FloatingBuddyView().apply {
-                    contentDescription = "Pip guide"
-                    setOnClickListener {
-                        playCheer()
-                        Toast.makeText(this@MainActivity, step.message, Toast.LENGTH_SHORT).show()
-                    }
-                }
-                addView(miniPip, LinearLayout.LayoutParams(dp(30), dp(30)))
-
-                val textStack = LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(6), 0, 0, 0)
-                    addView(label(step.badge, CORAL_DARK, 9.5f))
-                    addView(TextView(this@MainActivity).apply {
-                        text = step.title
-                        textSize = 13.5f
-                        setTextColor(INK)
-                        setTypeface(typeface, Typeface.BOLD)
-                    })
-                }
-                addView(textStack, LinearLayout.LayoutParams(0, -2, 1f))
-            }
-            addView(topRow)
-
-            addView(TextView(this@MainActivity).apply {
-                text = step.message
-                textSize = 12f
-                setTextColor(INK)
-                setLineSpacing(dp(2).toFloat(), 1f)
-                setPadding(0, dp(3), 0, dp(5))
-            })
-
-            val controls = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(2), 0, 0)
-
-                if (onboardingTourStep > 0) {
-                    val backBtn = actionButton("← Back") {
-                        onboardingTourStep--
-                        showOnboardingTourStep()
-                    }.apply {
-                        textSize = 12f
-                        minHeight = dp(32)
-                        minimumHeight = dp(32)
-                        setPadding(dp(8), dp(4), dp(8), dp(4))
-                        setBackgroundColor(Color.parseColor("#E0E6ED"))
-                        setTextColor(INK)
-                    }
-                    addView(backBtn, LinearLayout.LayoutParams(0, -2, 0.26f).apply { marginEnd = dp(6) })
-                }
-
-                val nextBtn = actionButton(step.nextButtonText) {
-                    miniPip.playCheer()
-                    if (onboardingTourStep == onboardingTourSteps.lastIndex) {
-                        finishOnboarding()
-                    } else {
-                        onboardingTourStep++
-                        showOnboardingTourStep()
-                    }
-                }.apply {
-                    textSize = 12f
-                    minHeight = dp(32)
-                    minimumHeight = dp(32)
-                    setPadding(dp(8), dp(4), dp(8), dp(4))
-                }
-                addView(nextBtn, LinearLayout.LayoutParams(0, -2, if (onboardingTourStep > 0) 0.50f else 0.74f).apply { marginEnd = dp(6) })
-
-                val exitBtn = actionButton("Exit ✕") {
-                    finishOnboarding()
-                }.apply {
-                    textSize = 11.5f
-                    minHeight = dp(32)
-                    minimumHeight = dp(32)
-                    setPadding(dp(6), dp(4), dp(6), dp(4))
-                    setBackgroundColor(Color.parseColor("#E0E6ED"))
-                    setTextColor(MUTED)
-                }
-                addView(exitBtn, LinearLayout.LayoutParams(0, -2, if (onboardingTourStep > 0) 0.24f else 0.26f))
-            }
-            addView(controls)
-        }
-
-        val overlay = SpotlightTourOverlay(this, targetView, tooltipCard)
+        val overlay = SpotlightTourOverlay(this, targetView)
         rootFrame.addView(overlay, FrameLayout.LayoutParams(-1, -1))
         tourOverlayView = overlay
+
+        val companion = pipCompanion ?: return
+        companion.guideMode = true
+        val stage = companion.stage
+        stage.bringToFront()
+        stage.hideBubble(immediately = true)
+
+        pageScroll.postDelayed({
+            val targetTop = ((targetView?.top ?: 0) - dp(16)).coerceAtLeast(0)
+            pageScroll.smoothScrollTo(0, targetTop)
+            // Wait for the scroll to settle before Pip flies over to explain.
+            pageScroll.postDelayed({
+                overlay.invalidate()
+                val isLast = onboardingTourStep == onboardingTourSteps.lastIndex
+                val actions = buildList {
+                    if (onboardingTourStep > 0) add(PipAction("Back") {
+                        onboardingTourStep--
+                        showOnboardingTourStep()
+                    })
+                    add(PipAction("Skip") { finishOnboarding() })
+                    add(PipAction(if (isLast) "Finish 🎉" else "Next", primary = true) {
+                        stage.pip.playCheer()
+                        if (isLast) finishOnboarding() else {
+                            onboardingTourStep++
+                            showOnboardingTourStep()
+                        }
+                    })
+                }
+                stage.guide(targetView, step.message, title = step.title, badge = step.badge, actions = actions)
+            }, 380L)
+        }, 80L)
     }
 
     private fun finishOnboarding() {
@@ -812,27 +1033,13 @@ class MainActivity : android.app.Activity() {
         }
         tourOverlayView?.let { rootFrame.removeView(it) }
         tourOverlayView = null
+        setupStage?.release()
+        setupStage = null
         onboardingScreen = null
         selectedTab = DashboardTab.OVERVIEW
         snapshot = repository.snapshot()
         setContentView(buildScreen())
         renderAppState()
-    }
-
-    private fun onboardingRoot() = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(dp(24), dp(24), dp(24), dp(32))
-    }
-
-    private fun showOnboardingContent(content: LinearLayout) {
-        val scroll = ScrollView(this).apply {
-            setBackgroundColor(CREAM)
-            isFillViewport = true
-            addView(content, android.view.ViewGroup.LayoutParams(-1, -2))
-        }
-        onboardingScreen = scroll
-        setContentView(scroll)
     }
 
     private fun navButton(tab: DashboardTab): Button = Button(this).apply {
@@ -856,14 +1063,10 @@ class MainActivity : android.app.Activity() {
     private fun showMorningRecapIfNeeded() {
         if (morningRecapDialog?.isShowing == true || !repository.shouldShowMorningRecap()) return
         val recap = repository.morningRecap()
-        val recapDay = recap.date.plusDays(1)
         val dialog = Dialog(this)
         morningRecapDialog = dialog
+        // buildMorningRecap installs the dismiss listener (marks the recap seen, releases Pip).
         dialog.setContentView(buildMorningRecap(recap, dialog))
-        dialog.setOnDismissListener {
-            repository.markMorningRecapSeen(recapDay)
-            morningRecapDialog = null
-        }
         dialog.show()
         dialog.window?.apply {
             setBackgroundDrawable(ColorDrawable(CREAM))
@@ -899,14 +1102,12 @@ class MainActivity : android.app.Activity() {
             setTypeface(typeface, Typeface.BOLD)
             setPadding(0, dp(6), 0, dp(12))
         })
-        val greeting = morningGreeting(recap)
-        content.addView(card {
-            addView(TextView(this@MainActivity).apply {
-                text = "Pip: “$greeting”"
-                textSize = 17f
-                setTextColor(INK)
-            })
-        })
+        // Pip's perch for the morning greeting; his bubble appears to the right of it.
+        val pipHome = View(this)
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(pipHome, LinearLayout.LayoutParams(dp(96), dp(96)))
+        }, LinearLayout.LayoutParams(-1, dp(132)))
 
         val focusCards = mutableListOf<View>()
         val streakCard = card {
@@ -927,7 +1128,7 @@ class MainActivity : android.app.Activity() {
                 MUTED,
                 14f
             ).apply { setPadding(0, dp(4), 0, 0) })
-        }.apply { setPadding(dp(18), dp(18), dp(76), dp(18)) }
+        }
         content.addView(streakCard)
         focusCards += streakCard
 
@@ -945,7 +1146,7 @@ class MainActivity : android.app.Activity() {
             addView(label(usageInsight(recap), MUTED, 14f).apply {
                 setPadding(0, dp(8), 0, 0)
             })
-        }.apply { setPadding(dp(18), dp(18), dp(76), dp(18)) }
+        }
         content.addView(usageCard)
         focusCards += usageCard
 
@@ -967,7 +1168,7 @@ class MainActivity : android.app.Activity() {
                 "Fast-scroll time",
                 formatDuration(recap.metrics.agitationSeconds)
             ).apply { setPadding(0, dp(10), 0, 0) })
-        }.apply { setPadding(dp(18), dp(18), dp(76), dp(18)) }
+        }
         content.addView(habitCard)
         focusCards += habitCard
 
@@ -979,72 +1180,90 @@ class MainActivity : android.app.Activity() {
                 setTextColor(INK)
                 setPadding(0, dp(8), 0, 0)
             })
-        }.apply { setPadding(dp(18), dp(18), dp(76), dp(18)) }
+        }
         content.addView(nextStepCard)
         focusCards += nextStepCard
 
-        val buddyNote = TextView(this).apply {
-            textSize = 14f
-            setTextColor(INK)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            background = roundedBackground(Color.WHITE, dp(14).toFloat())
-            elevation = dp(4).toFloat()
+        lateinit var stage: PipStage
+        val continueButton = actionButton("Let’s make today count") {
+            stage.pip.playCheer()
+            stage.postDelayed(450) { dialog.dismiss() }
+        }.apply {
+            textSize = 16f
+            setTypeface(typeface, Typeface.BOLD)
+            background = roundedBackground(CORAL, dp(16).toFloat())
+            stateListAnimator = null
         }
-        val continueButton = actionButton("Let’s make today count") { dialog.dismiss() }
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(12))
+            setPadding(dp(20), dp(10), dp(20), dp(18))
             setBackgroundColor(CREAM)
-            addView(buddyNote)
-            addView(continueButton, LinearLayout.LayoutParams(-1, -2).apply {
-                topMargin = dp(8)
-            })
+            addView(continueButton, LinearLayout.LayoutParams(-1, dp(54)))
         }
         root.addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
-        val floatingBuddy = FloatingBuddyView().apply {
-            contentDescription = "Pip moves to the section being discussed"
-            isClickable = false
-            isFocusable = false
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        root.addView(floatingBuddy, FrameLayout.LayoutParams(dp(54), dp(54), Gravity.TOP or Gravity.END).apply {
-            marginEnd = dp(28)
-        })
+        stage = PipStage(this, root, pipHome, pipSizeDp = 96)
+        stage.onPipTapped = { stage.pip.playCheer() }
+
+        // Pip greets from the top, then flies down to narrate whichever card is in focus.
+        var narrating = false
         var currentFocus = -1
-        fun updateFocus() {
-            if (focusCards.isEmpty() || root.height == 0) return
-            val marker = scrollView.scrollY + (scrollView.height * .4f).toInt()
-            val index = focusCards.indices.minByOrNull { section ->
+        fun focusedCard(): Int? {
+            if (focusCards.isEmpty() || root.height == 0) return null
+            val marker = scrollView.scrollY + (scrollView.height * .35f).toInt()
+            return focusCards.indices.minByOrNull { section ->
                 val view = focusCards[section]
                 when {
                     marker < view.top -> view.top - marker
                     marker > view.bottom -> marker - view.bottom
                     else -> 0
                 }
-            } ?: return
-            if (index != currentFocus) {
-                currentFocus = index
-                focusCards.forEachIndexed { cardIndex, view ->
-                    view.background = roundedBackground(
-                        if (cardIndex == index) Color.parseColor("#FFF2CB") else Color.WHITE,
-                        dp(18).toFloat()
-                    )
-                }
-                buddyNote.text = recapBuddyMessage(recap, index)
-                floatingBuddy.playCheer()
             }
-            val section = focusCards[index]
-            val targetY = (scrollView.top + section.top - scrollView.scrollY + dp(8))
-                .coerceIn(dp(8), (root.height - footer.height - dp(62)).coerceAtLeast(dp(8)))
-            floatingBuddy.animate()
-                .translationY(targetY.toFloat())
-                .setDuration(320)
-                .setInterpolator(OvershootInterpolator())
-                .start()
         }
-        scrollView.setOnScrollChangeListener { _, _, _, _, _ -> updateFocus() }
-        root.post { updateFocus() }
+        fun narrate(force: Boolean = false) {
+            val index = focusedCard() ?: return
+            if (index == currentFocus && !force) return
+            currentFocus = index
+            focusCards.forEachIndexed { cardIndex, view ->
+                view.background = roundedBackground(
+                    if (cardIndex == index) Color.parseColor("#FFF2CB") else Color.WHITE,
+                    dp(18).toFloat()
+                )
+            }
+            stage.bottomInset = footer.height
+            stage.guide(
+                focusCards[index],
+                recapBuddyMessage(recap, index),
+                dock = PipStage.Placement.DOCK_BOTTOM
+            )
+        }
+        fun startNarrating() {
+            if (narrating) return
+            narrating = true
+            // Leave room under the last card for the docked bubble.
+            scrollView.setPadding(0, 0, 0, dp(330))
+            narrate(force = true)
+        }
+        val settle = Runnable { if (narrating) narrate() }
+        scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
+            if (!narrating) startNarrating()
+            scrollView.removeCallbacks(settle)
+            scrollView.postDelayed(settle, 220)
+        }
+        stage.postDelayed(450) {
+            stage.pip.wave(1.8f)
+            if (recap.metGoals) stage.pip.playCheer()
+            stage.say(
+                morningGreeting(recap),
+                placement = PipStage.Placement.RIGHT,
+                autoHideMs = 6_500L
+            ) { stage.postDelayed(250) { startNarrating() } }
+        }
+        dialog.setOnDismissListener {
+            stage.release()
+            repository.markMorningRecapSeen(recap.date.plusDays(1))
+            morningRecapDialog = null
+        }
         return root
     }
 
@@ -1238,6 +1457,7 @@ class MainActivity : android.app.Activity() {
 
     private fun showFocusScreen(focusSession: FocusSession) {
         focusMode = true
+        pipCompanion?.onPause()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -2223,15 +2443,24 @@ class MainActivity : android.app.Activity() {
         }
     }
 
-    private fun cheerBuddy() {
-        val messages = arrayOf(
-            "One mindful moment is a win.",
-            "Your progress belongs to you.",
-            "A little pause can make a big difference.",
-            "Keep going at your own pace."
-        )
-        pageSubtitle.text = messages[buddyMessageIndex++ % messages.size]
-        buddyView.playCheer()
+    /** What Pip needs to know about the app; Pip never touches the repository directly. */
+    private val pipHost = object : PipCompanion.Host {
+        override fun focusFraction(): Float {
+            val targetSeconds = repository.dailyFocusTargetMinutes() * 60f
+            return (repository.todayFocusSeconds() / targetSeconds).coerceIn(0f, 1f)
+        }
+
+        override fun todayFocusMinutes(): Int = (repository.todayFocusSeconds() / 60L).toInt()
+
+        override fun defaultFocusMinutes(): Int = repository.defaultFocusMinutes()
+
+        override fun onStartFocusRequested() {
+            showFocusDurationPickerDialog()
+        }
+
+        override fun isBusyElsewhere(): Boolean =
+            !activityResumed || focusMode || tourOverlayView != null ||
+                morningRecapDialog?.isShowing == true
     }
 
     private fun dailyMotivationalQuote(): String {
@@ -2242,152 +2471,6 @@ class MainActivity : android.app.Activity() {
             "A little awareness today can make room for what matters tomorrow."
         )
         return quotes[java.time.LocalDate.now().dayOfYear % quotes.size]
-    }
-
-    private inner class FloatingBuddyView : View(this@MainActivity) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private var bobOffset = 0f
-        private var cheerAmount = 0f
-        private var isSad = false
-        private val bobAnimator = ValueAnimator.ofFloat(-3f, 3f).apply {
-            duration = 1_350
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.REVERSE
-            addUpdateListener {
-                bobOffset = it.animatedValue as Float
-                invalidate()
-            }
-        }
-        private var cheerAnimator: ValueAnimator? = null
-
-        init {
-            setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-        }
-
-        override fun onAttachedToWindow() {
-            super.onAttachedToWindow()
-            bobAnimator.start()
-        }
-
-        override fun onDetachedFromWindow() {
-            bobAnimator.cancel()
-            cheerAnimator?.cancel()
-            super.onDetachedFromWindow()
-        }
-
-        fun playCheer() {
-            cheerAnimator?.cancel()
-            cheerAnimator = ValueAnimator.ofFloat(0f, 1f, 0f).apply {
-                duration = 560
-                addUpdateListener {
-                    cheerAmount = it.animatedValue as Float
-                    invalidate()
-                }
-                start()
-            }
-            animate()
-                .rotationBy(12f)
-                .scaleX(1.14f)
-                .scaleY(1.14f)
-                .setDuration(170)
-                .withEndAction {
-                    animate().rotation(0f).scaleX(1f).scaleY(1f).setDuration(220).start()
-                }
-                .start()
-        }
-
-        fun setSad(sad: Boolean) {
-            isSad = sad
-            contentDescription = if (sad) {
-                "Pip looks a little sad because a daily goal was crossed."
-            } else {
-                "Pip is cheering you on."
-            }
-            invalidate()
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val unit = minOf(width, height) / 72f
-            canvas.save()
-            canvas.translate(width / 2f, height / 2f + bobOffset * unit / 3f)
-            canvas.scale(unit, unit)
-
-            if (cheerAmount > 0f) {
-                paint.color = GOLD
-                paint.alpha = (255 * cheerAmount).toInt()
-                paint.style = Paint.Style.FILL
-                for (index in 0..3) {
-                    val angle = Math.toRadians((index * 90 + 45).toDouble())
-                    val distance = 24f + 5f * cheerAmount
-                    drawSpark(
-                        canvas,
-                        (kotlin.math.cos(angle) * distance).toFloat(),
-                        (kotlin.math.sin(angle) * distance).toFloat(),
-                        3f
-                    )
-                }
-                paint.alpha = 255
-            }
-
-            paint.setShadowLayer(2f, 0f, 2f, Color.argb(35, 23, 32, 42))
-            paint.color = TEAL
-            paint.style = Paint.Style.FILL
-            canvas.drawRoundRect(RectF(-21f, -19f, 21f, 21f), 15f, 15f, paint)
-            paint.clearShadowLayer()
-
-            paint.color = Color.parseColor("#B8E8D8")
-            canvas.drawOval(RectF(-12f, -1f, 12f, 15f), paint)
-
-            paint.color = GOLD
-            val sprout = Path().apply {
-                moveTo(0f, -17f)
-                cubicTo(-2f, -24f, -10f, -24f, -9f, -29f)
-                cubicTo(-2f, -29f, 1f, -25f, 1f, -20f)
-                cubicTo(3f, -27f, 8f, -29f, 12f, -26f)
-                cubicTo(11f, -19f, 6f, -17f, 0f, -17f)
-                close()
-            }
-            canvas.drawPath(sprout, paint)
-
-            paint.color = INK
-            canvas.drawCircle(-7f, -6f, 1.7f, paint)
-            canvas.drawCircle(7f, -6f, 1.7f, paint)
-            paint.color = Color.parseColor("#F3A49A")
-            canvas.drawCircle(-12f, 0f, 2.5f, paint)
-            canvas.drawCircle(12f, 0f, 2.5f, paint)
-            paint.color = INK
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 1.6f
-            if (isSad) {
-                canvas.drawLine(-10f, -12f, -4f, -10f, paint)
-                canvas.drawLine(4f, -10f, 10f, -12f, paint)
-                canvas.drawArc(RectF(-4f, -1f, 4f, 6f), 200f, 140f, false, paint)
-            } else {
-                canvas.drawArc(RectF(-4f, -3f, 4f, 4f), 15f, 150f, false, paint)
-            }
-            paint.style = Paint.Style.FILL
-
-            paint.color = PURPLE
-            canvas.drawOval(RectF(-14f, 17f, -4f, 21f), paint)
-            canvas.drawOval(RectF(4f, 17f, 14f, 21f), paint)
-            canvas.restore()
-        }
-
-        private fun drawSpark(canvas: Canvas, x: Float, y: Float, radius: Float) {
-            val spark = Path().apply {
-                moveTo(x, y - radius)
-                lineTo(x + radius * .35f, y - radius * .35f)
-                lineTo(x + radius, y)
-                lineTo(x + radius * .35f, y + radius * .35f)
-                lineTo(x, y + radius)
-                lineTo(x - radius * .35f, y + radius * .35f)
-                lineTo(x - radius, y)
-                lineTo(x - radius * .35f, y - radius * .35f)
-                close()
-            }
-            canvas.drawPath(spark, paint)
-        }
     }
 
     private inner class GoalFlameView(

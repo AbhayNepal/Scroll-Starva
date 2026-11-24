@@ -11,6 +11,9 @@ class FocusDurationPicker(context: Context, initialDurationMillis: Long) : Linea
     val durationMillis: Long
         get() = (hoursPicker.selectedValue * 60L + minutesPicker.selectedValue) * 60_000L
 
+    /** Called with the new duration whenever either wheel changes. */
+    var onDurationChanged: ((Long) -> Unit)? = null
+
     init {
         val initialMinutes = (initialDurationMillis / 60_000L)
             .coerceIn(1L, TrackingTimerSettings.MAX_FOCUS_SESSION_MINUTES.toLong())
@@ -41,7 +44,9 @@ class FocusDurationPicker(context: Context, initialDurationMillis: Long) : Linea
                 TrackingTimerSettings.MAX_FOCUS_SESSION_HOURS -> minutesPicker.setRange(0, 0)
                 else -> minutesPicker.setRange(0, 59)
             }
+            onDurationChanged?.invoke(durationMillis)
         }
+        minutesPicker.onValueChanged = { onDurationChanged?.invoke(durationMillis) }
         addView(hoursPicker, LayoutParams(-1, dp(68)))
         addView(minutesPicker, LayoutParams(-1, dp(68)))
     }
