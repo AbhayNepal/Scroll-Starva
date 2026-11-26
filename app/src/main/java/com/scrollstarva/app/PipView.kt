@@ -35,6 +35,12 @@ class PipView(context: Context) : View(context) {
     /** Body lean in degrees; eased toward every frame. */
     var tiltTarget = 0f
 
+    /**
+     * Calm mode for places Pip appears often (e.g. reminder cards): no idle hops or waves and
+     * slower glances, so repeated appearances stay soothing rather than busy.
+     */
+    var calm = false
+
     private var sad = false
 
     // ---------------------------------------------------------------- animation state
@@ -207,14 +213,14 @@ class PipView(context: Context) : View(context) {
                 lookTargetX = (Math.random() * 2 - 1).toFloat()
                 lookTargetY = (Math.random() * 1.2 - 0.6).toFloat()
             }
-            nextGlanceAt = time + 1.4f + (Math.random() * 2.6).toFloat()
+            nextGlanceAt = time + (if (calm) 3f else 1.4f) + (Math.random() * 2.6).toFloat()
         }
         lookX += (lookTargetX - lookX) * ease(9f)
         lookY += (lookTargetY - lookY) * ease(9f)
 
         // Occasional idle flourish when nothing else is going on
         if (time >= nextIdleActionAt) {
-            if (!flying && !talking && pointTarget == 0f) {
+            if (!calm && !flying && !talking && pointTarget == 0f) {
                 when ((Math.random() * 3).toInt()) {
                     0 -> hop()
                     1 -> wave(1.0f)
