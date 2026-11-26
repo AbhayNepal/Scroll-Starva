@@ -1,4 +1,6 @@
-**Yes, you can build this app on Android, but it requires using Android’s `AccessibilityService` API.** Standard Android APIs (like `UsageStatsManager`) can only tell you the total time an entire app (e.g., YouTube) was open, not whether the user was watching a normal video or scrolling through Shorts.
+**Yes, you can build this app on Android, but it requires using Android’s `AccessibilityService` API.** Standard Android APIs (like `UsageStatsManager`) can tell you how long an app was open, but not how much the user scrolled in it.
+
+**What is measured:** for every app the user chooses to track, Scroll Starva records **all time spent in the app** and **every vertical scroll gesture in the app** — the home feed, Shorts/Reels, comments and any other screen all count. Short-form feed detection (below) is kept only for the on-device Debug log.
 
 ---
 
@@ -6,9 +8,9 @@
 
 To track specific feeds inside third-party apps, your app needs to run an **`AccessibilityService` in the background**.
 
-### A. Detecting Specific Feeds (Shorts, Reels, TikTok)
+### A. Detecting the Tracked Apps (and, for diagnostics, their feeds)
 
-Your service listens to UI window changes (`AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED`) and UI node updates:
+Your service listens to UI window changes (`AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED`), scroll events (`TYPE_VIEW_SCROLLED`) and, for the app being tracked, content changes (`TYPE_WINDOW_CONTENT_CHANGED`):
 
 1. **App Identification:** Check the active package name:
 * TikTok: `com.zhiliaoapp.musically`
@@ -17,19 +19,26 @@ Your service listens to UI window changes (`AccessibilityEvent.TYPE_WINDOW_STATE
 * Facebook: `com.facebook.katana`
 
 
-2. **Screen Identification:** Scan the visible screen layout (`AccessibilityNodeInfo`) for specific UI element indicators (e.g., resource IDs or content descriptions for the Reels/Shorts player vs. the home feed).
+   The user may also select other apps; they are tracked the same way.
+
+2. **Screen Identification (diagnostics only):** Scan the visible screen layout (`AccessibilityNodeInfo`) for indicators of the Reels/Shorts player vs. the home feed and show the result in the Debug log. It does not affect time or scroll counts.
 
 ### B. Measuring Time Spent
 
-* When your app detects that a Reel/Short view is actively visible, start a background timer (`SystemClock.elapsedRealtime()`).
-* Pause or log the accumulated time whenever the user switches feeds, leaves the app, or turns off the screen.
+* A **session** starts when a tracked app comes to the foreground (or is already in front when the screen is unlocked) and is timed with `SystemClock.elapsedRealtime()`.
+* The session continues while the app stays in front, **including time spent watching without touching the screen**. Every 10 seconds the service checks which app is in the foreground rather than relying on a stream of events.
+* The session ends when the user switches to another app (after a 2.5 s grace period, ending at the moment they left), opens Scroll Starva, or turns off the screen. If the foreground app can’t be determined, the session ends after 3 minutes without any events, at the time of the last event.
+* Sessions that cross midnight are split so each day gets its own time.
+* Time spent in a tracked app during a focus session still counts as screen time (Pip asks the user to return to focus).
 
 ### C. Counting Scrolls
 
-Because vertical short-form platforms use snap-scrolling (`ViewPager2`), each scroll advances exactly **one full screen height**:
+* Listen for `AccessibilityEvent.TYPE_VIEW_SCROLLED` events from any screen of a tracked app and keep only vertical ones.
+* Count **one scroll per gesture**: a swipe or fling produces a burst of scroll events, and a new gesture starts once events have been quiet for 300 ms. A snap in a short-video feed and a long fling through a list therefore both count as one.
+* Some full-screen video pagers don’t send scroll events at all (YouTube Shorts, as of late 2026). For these, the service also listens to `TYPE_WINDOW_CONTENT_CHANGED` from the app already being tracked and counts one scroll each time a different page of the pager (`reel_recycler`) settles on screen. A looping video doesn’t change the page, so it isn’t counted. Content changes never start a session.
+* Scrolls are counted in the session database, which is the single source for every figure (dashboard, goals, reminders and distance).
 
-* Listen for `AccessibilityEvent.TYPE_VIEW_SCROLLED` events coming from the target layout.
-* Increment the scroll counter for that platform each time a vertical scroll gesture completes.
+Short-form feeds use snap-scrolling (`ViewPager2`), so each scroll there advances about **one full screen height**; the distance estimate below uses that for every scroll.
 
 ---
 

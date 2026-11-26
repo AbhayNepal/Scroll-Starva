@@ -166,7 +166,8 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         endedAtMillis: Long,
         durationMillis: Long,
         strokeCount: Int,
-        completed: Boolean
+        completed: Boolean,
+        marathonSeconds: Long = DEFAULT_MARATHON_SECONDS
     ) {
         var startMillis = endedAtMillis
         readableDatabase.rawQuery(
@@ -175,8 +176,9 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         ).use { cursor ->
             if (cursor.moveToFirst()) startMillis = cursor.getLong(0)
         }
-        val wallSeconds = maxOf(0L, (endedAtMillis - startMillis) / 1000)
-        val durationSeconds = minOf(maxOf(0L, durationMillis / 1000), wallSeconds)
+        // Round rather than truncate so many short sessions don't each lose up to a second.
+        val wallSeconds = maxOf(0L, (endedAtMillis - startMillis + 500) / 1000)
+        val durationSeconds = minOf(maxOf(0L, (durationMillis + 500) / 1000), wallSeconds)
         val cadence = if (durationSeconds > 0) strokeCount * 60.0 / durationSeconds else 0.0
         val agitationSeconds = if (cadence > AGITATION_CADENCE_SPM) durationSeconds else 0L
         val values = ContentValues().apply {
@@ -186,7 +188,7 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             put("avg_cadence_spm", cadence)
             put("agitation_duration_seconds", agitationSeconds)
             put("is_micro_check", if (completed && durationSeconds < MICRO_CHECK_SECONDS) 1 else 0)
-            put("is_marathon", if (durationSeconds > MARATHON_SECONDS) 1 else 0)
+            put("is_marathon", if (durationSeconds > marathonSeconds) 1 else 0)
             if (completed) put("completed", 1)
         }
         writableDatabase.update("scroll_activities", values, "activity_id = ?", arrayOf(activityId))
@@ -221,7 +223,13 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                     THEN (end_timestamp - start_timestamp) / 1000 
                     ELSE duration_seconds 
                 END,
-                is_micro_check = CASE WHEN duration_seconds < ? THEN 1 ELSE 0 END
+                is_micro_check = CASE
+                    WHEN (CASE
+                        WHEN (end_timestamp - start_timestamp) / 1000 > 0
+                        THEN (end_timestamp - start_timestamp) / 1000
+                        ELSE duration_seconds
+                    END) < ? THEN 1 ELSE 0
+                END
             WHERE completed = 0
             """.trimIndent(),
             arrayOf(MICRO_CHECK_SECONDS)
@@ -432,8 +440,11 @@ class TrackingDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         /** Maximum session duration in seconds to count as a micro-check (<60 seconds). */
         const val MICRO_CHECK_SECONDS = 60L
 
-        /** Continuous session threshold in seconds to count as a marathon session (>20 minutes). */
-        const val MARATHON_SECONDS = 20 * 60L
+        /**
+         * Marathon threshold used when the caller doesn't pass one. Sessions are normally judged
+         * against the user's marathon reminder setting (see [TrackingRepository.finishSession]).
+         */
+        const val DEFAULT_MARATHON_SECONDS = 20 * 60L
 
         /** Scroll cadence threshold in strokes-per-minute (SPM) indicating agitation (>25 SPM). */
         const val AGITATION_CADENCE_SPM = 25.0

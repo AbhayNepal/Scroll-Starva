@@ -20,7 +20,7 @@ import java.util.Locale
  * @property visits Total app launch/re-entry events recorded today.
  * @property rapidReentries Count of rapid app re-entries within 5 minutes of closing.
  * @property microChecks Count of quick feed checks lasting less than 60 seconds.
- * @property marathonSeconds Total time spent in continuous sessions longer than 20 minutes.
+ * @property marathonSeconds Total time spent in sessions longer than the marathon reminder setting.
  * @property agitationSeconds Total time spent scrolling at high cadence (>25 SPM).
  * @property activities List of recent 30 recorded scroll activities.
  * @property dailyHistory Daily rollup metrics for the last 15 days.
@@ -151,20 +151,17 @@ class TrackingRepository(context: Context) {
      * Generates a complete [TrackingSnapshot] containing today's live scroll metrics, HTI score, and history.
      */
     fun snapshot(): TrackingSnapshot {
-        resetLegacyCountersIfNeeded()
-        val scrolls = preferences.getInt(KEY_SCROLLS, 0)
-        val scrollsByPlatform = FeedPlatform.entries.associateWith { platform ->
-            preferences.getInt(scrollKey(platform), 0)
-        }
-        val activeMillis = preferences.getLong(KEY_ACTIVE_MILLIS, 0)
+        // Every figure comes from the session database so screens, goals and distance agree.
+        val daily = database.dailyRollup(today())
+        val scrollsByPackage = database.dailyScrollCountsByPackage(today())
+        val scrolls = daily.scrollCount
         val screen = contextDisplayMetrics(appContext)
         val heightMeters = if (screen.second > 0) screen.first / screen.second * 0.0254 else 0.14
-        val daily = database.dailyRollup(today())
         return TrackingSnapshot(
             scrolls = scrolls,
-            scrollsByPlatform = scrollsByPlatform,
-            scrollsByPackage = database.dailyScrollCountsByPackage(today()),
-            activeMillis = activeMillis,
+            scrollsByPlatform = FeedPlatform.entries.associateWith { scrollsByPackage[it.packageName] ?: 0 },
+            scrollsByPackage = scrollsByPackage,
+            activeMillis = daily.activeSeconds * 1_000L,
             distanceKm = scrolls * heightMeters / 1000.0,
             analyticsActiveSeconds = daily.activeSeconds,
             htiScore = daily.htiScore,
@@ -177,34 +174,6 @@ class TrackingRepository(context: Context) {
             activities = database.recentActivities(30),
             dailyHistory = database.dailyHistory(15)
         )
-    }
-
-    /**
-     * Increments today's scroll count for the specified package.
-     *
-     * @param packageName Target app package name where the scroll occurred.
-     */
-    fun addScroll(packageName: String) {
-        resetLegacyCountersIfNeeded()
-        val editor = preferences.edit()
-            .putInt(KEY_SCROLLS, preferences.getInt(KEY_SCROLLS, 0) + 1)
-        FeedPlatform.entries.firstOrNull { it.packageName == packageName }?.let { platform ->
-            editor.putInt(scrollKey(platform), preferences.getInt(scrollKey(platform), 0) + 1)
-        }
-        editor.apply()
-    }
-
-    /**
-     * Accumulates active foreground usage time in milliseconds.
-     *
-     * @param millis Time duration in milliseconds to add.
-     */
-    fun addActiveMillis(millis: Long) {
-        if (millis <= 0) return
-        resetLegacyCountersIfNeeded()
-        preferences.edit()
-            .putLong(KEY_ACTIVE_MILLIS, preferences.getLong(KEY_ACTIVE_MILLIS, 0) + millis)
-            .apply()
     }
 
     /**
@@ -229,7 +198,10 @@ class TrackingRepository(context: Context) {
         endedAtMillis: Long,
         durationMillis: Long,
         strokeCount: Int
-    ) = database.updateSession(activityId, endedAtMillis, durationMillis, strokeCount, completed = false)
+    ) = database.updateSession(
+        activityId, endedAtMillis, durationMillis, strokeCount, completed = false,
+        marathonSeconds = marathonMinutes() * 60L
+    )
 
     /** Finalizes and completes a feed session in the database. */
     fun finishSession(
@@ -237,7 +209,10 @@ class TrackingRepository(context: Context) {
         endedAtMillis: Long,
         durationMillis: Long,
         strokeCount: Int
-    ) = database.updateSession(activityId, endedAtMillis, durationMillis, strokeCount, completed = true)
+    ) = database.updateSession(
+        activityId, endedAtMillis, durationMillis, strokeCount, completed = true,
+        marathonSeconds = marathonMinutes() * 60L
+    )
 
     /** Cleans up any leftover uncompleted sessions from app/service restarts. */
     fun finishInterruptedSessions() = database.finishInterruptedSessions()
@@ -451,14 +426,15 @@ class TrackingRepository(context: Context) {
         val yesterday = today.minusDays(1)
         val metrics = database.dailyRollup(yesterday.toString())
         val previousDayMetrics = database.dailyRollup(yesterday.minusDays(1).toString())
-        val metGoals = metrics.visits > 0 &&
-            metrics.scrollCount < dailyScrollTarget() &&
-            metrics.activeSeconds < dailyTimeTargetMinutes() * 60L
+        val streak = dailyGoalStreak(today)
+        // Use the stored verdict (judged against the goals that applied that day) so the recap
+        // and the streak can never disagree about yesterday.
+        val metGoals = yesterday.toString() in preferences.getStringSet(KEY_GOAL_SUCCESS_DATES, emptySet()).orEmpty()
         return MorningRecap(
             date = yesterday,
             metrics = metrics,
             previousDayMetrics = previousDayMetrics,
-            streak = dailyGoalStreak(today),
+            streak = streak,
             bestStreak = bestDailyGoalStreak(today),
             metGoals = metGoals
         )
@@ -504,10 +480,14 @@ class TrackingRepository(context: Context) {
         val successfulDays = preferences.getStringSet(KEY_GOAL_SUCCESS_DATES, emptySet())
             .orEmpty()
             .toMutableSet()
+        val monitoredDays = preferences.getStringSet(KEY_MONITORED_DATES, emptySet()).orEmpty()
         var date = firstDate
         while (!date.isAfter(yesterday)) {
             val metrics = database.dailyRollup(date.toString())
-            if (metrics.visits > 0 &&
+            // A day counts if tracking was running, even with zero use: not opening a feed at
+            // all is the best outcome and shouldn't break the streak.
+            val wasTracked = metrics.visits > 0 || date.toString() in monitoredDays
+            if (wasTracked &&
                 metrics.scrollCount < scrollTarget &&
                 metrics.activeSeconds < timeTargetSeconds
             ) {
@@ -530,6 +510,23 @@ class TrackingRepository(context: Context) {
             .putStringSet(KEY_GOAL_SUCCESS_DATES, successfulDays)
             .putString(KEY_GOAL_LAST_EVALUATED_DATE, yesterday.toString())
             .putInt(KEY_BEST_GOAL_STREAK, bestStreak)
+            .apply()
+    }
+
+    /**
+     * Notes that the tracking service is running today, so a day without any use still counts
+     * toward the streak. Cheap to call often: it only writes when the date changes.
+     */
+    fun markMonitoredToday(today: LocalDate = LocalDate.now()) {
+        val date = today.toString()
+        if (preferences.getString(KEY_LAST_MONITORED_DATE, null) == date) return
+        val cutoff = today.minusDays(MONITORED_DAYS_KEPT).toString()
+        val dates = preferences.getStringSet(KEY_MONITORED_DATES, emptySet()).orEmpty()
+            .filterTo(mutableSetOf()) { it >= cutoff }
+        dates += date
+        preferences.edit()
+            .putStringSet(KEY_MONITORED_DATES, dates)
+            .putString(KEY_LAST_MONITORED_DATE, date)
             .apply()
     }
 
@@ -736,23 +733,7 @@ class TrackingRepository(context: Context) {
             .apply()
     }
 
-    private fun resetLegacyCountersIfNeeded() {
-        val date = today()
-        if (preferences.getString(KEY_DATE, null) != date) {
-            preferences.edit()
-                .putString(KEY_DATE, date)
-                .putInt(KEY_SCROLLS, 0)
-                .putLong(KEY_ACTIVE_MILLIS, 0)
-                .also { editor ->
-                    FeedPlatform.entries.forEach { editor.putInt(scrollKey(it), 0) }
-                }
-                .apply()
-        }
-    }
-
     private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-
-    private fun scrollKey(platform: FeedPlatform) = "${KEY_SCROLLS}_${platform.name.lowercase(Locale.US)}"
 
     private fun dailyLimitPromptKey(limit: DailyLimitType) =
         "daily_limit_prompt_${limit.name.lowercase(Locale.US)}"
@@ -769,12 +750,6 @@ class TrackingRepository(context: Context) {
         const val KEY_DAILY_FOCUS_TARGET_MINUTES = "daily_focus_target_minutes"
         const val KEY_TODAY_FOCUS_SECONDS = "today_focus_seconds"
         const val KEY_FOCUS_SECONDS_DATE = "focus_seconds_date"
-        /** Key storing the current date string (yyyy-MM-dd) for daily counter resets. */
-        const val KEY_DATE = "date"
-        /** Key storing today's cumulative scroll count. */
-        const val KEY_SCROLLS = "scrolls"
-        /** Key storing today's cumulative active foreground time in milliseconds. */
-        const val KEY_ACTIVE_MILLIS = "active_millis"
         /** Key storing epoch end-timestamp in milliseconds for active focus session. */
         const val KEY_FOCUS_ENDS_AT = "focus_ends_at"
         /** Key storing initial duration in milliseconds for active focus session. */
@@ -813,6 +788,12 @@ class TrackingRepository(context: Context) {
         const val KEY_BEST_GOAL_STREAK = "best_goal_streak"
         /** Key storing date string of the last viewed morning recap. */
         const val KEY_LAST_MORNING_RECAP_DATE = "last_morning_recap_date"
+        /** Key storing dates (yyyy-MM-dd) on which the tracking service was running. */
+        const val KEY_MONITORED_DATES = "monitored_dates"
+        /** Key storing the last date added to [KEY_MONITORED_DATES]. */
+        const val KEY_LAST_MONITORED_DATE = "last_monitored_date"
+        /** How many days of monitored dates to keep. */
+        const val MONITORED_DAYS_KEPT = 60L
     }
 }
 

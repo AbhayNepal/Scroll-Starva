@@ -34,22 +34,31 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
     private val handler = Handler(Looper.getMainLooper())
     private var trackingPackage: String? = null
-    private var trackingPlatform: FeedPlatform? = null
     private var trackingAppLabel: String? = null
     private var trackingActivityId: String? = null
     private var trackingStartedAtElapsed = 0L
     private var trackingStartedAtWall = 0L
-    private var trackingFeedActive = false
-    private var lastCheckpointElapsed = 0L
     private var lastEventElapsed = SystemClock.elapsedRealtime()
     private var isScreenOffReceiverRegistered = false
     private val screenOffReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_SCREEN_OFF) {
-                AccessibilityDiagnostics.record("Screen turned off -> stopping active session")
-                stopTracking()
-                removeIntervention()
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    AccessibilityDiagnostics.record("Screen turned off -> stopping active session")
+                    stopTracking()
+                    removeIntervention()
+                }
+                // Coming back to a tracked app after unlocking often sends no window event, so
+                // look at the foreground app instead of waiting for the first scroll.
+                Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT ->
+                    handler.postDelayed(resumeTrackingIfForeground, SCREEN_ON_SETTLE_MILLIS)
             }
+        }
+    }
+    private val resumeTrackingIfForeground = Runnable {
+        val active = activeWindowPackage()
+        if (active != null && active != packageName && active in repository.selectedPackages()) {
+            startTracking(active)
         }
     }
     private val systemOverlayPackages = setOf(
@@ -60,7 +69,14 @@ class ScrollAccessibilityService : AccessibilityService() {
         "com.google.android.inputmethod.latin"
     )
     private var sessionScrollCount = 0
-    private var lastScrollAt = 0L
+    private var lastScrollEventAt = 0L
+    private var lastScrollDeltaY = 0
+    private var lastPagerCheckAt = 0L
+    private var currentPagerPage: AccessibilityNodeInfo? = null
+    private var pendingStopElapsed = 0L
+    private var lastInAppElapsed = 0L
+    private var lastInAppWall = 0L
+    private var pendingStopWall = 0L
     private var lastLegacyScrollPosition: LegacyScrollPosition? = null
     private var marathonReminderShown = false
     private var lastMarathonNarration: String? = null
@@ -68,7 +84,13 @@ class ScrollAccessibilityService : AccessibilityService() {
     private var lastFocusNarration: String? = null
     private var lastPromptShownAtElapsed = 0L
     private var interventionView: android.view.View? = null
-    private val delayedStop = Runnable { stopTracking() }
+    private val delayedStop = Runnable {
+        // End the session when the user left, not when the grace period ran out.
+        val endElapsed = pendingStopElapsed
+        val endWall = pendingStopWall
+        pendingStopElapsed = 0L
+        if (endElapsed > 0L) stopTracking(endElapsed, endWall) else stopTracking()
+    }
     private val repeatMarathonReminderRunnable = Runnable {
         showPendingMarathonReminderIfDue()
     }
@@ -86,6 +108,7 @@ class ScrollAccessibilityService : AccessibilityService() {
 
     private val flushTimer = object : Runnable {
         override fun run() {
+            repository.markMonitoredToday()
             showPendingMarathonReminderIfDue()
             checkpointAndCheckInterventions()
             handler.postDelayed(this, CHECKPOINT_INTERVAL_MILLIS)
@@ -111,7 +134,11 @@ class ScrollAccessibilityService : AccessibilityService() {
         try {
             if (!isScreenOffReceiverRegistered) {
                 try {
-                    registerReceiver(screenOffReceiver, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF))
+                    registerReceiver(screenOffReceiver, android.content.IntentFilter().apply {
+                        addAction(Intent.ACTION_SCREEN_OFF)
+                        addAction(Intent.ACTION_SCREEN_ON)
+                        addAction(Intent.ACTION_USER_PRESENT)
+                    })
                     isScreenOffReceiverRegistered = true
                 } catch (_: Exception) {}
             }
@@ -121,16 +148,13 @@ class ScrollAccessibilityService : AccessibilityService() {
             val activeWindow = try { rootInActiveWindow } catch (_: Exception) { null }
             val activePackageName = activeWindow?.packageName?.toString()
             if (activePackageName != null && activePackageName in repository.selectedPackages()) {
-                startTracking(activePackageName)
-                trackingFeedActive = trackingPlatform?.let { platform ->
-                    FeedDetector.isShortFormFeed(FeedDetector.visibleLabels(activeWindow), platform)
-                } ?: false
-                if (trackingFeedActive) {
-                    showPendingMarathonReminderIfDue()
-                }
+                // A service (re)start is not the user re-opening the app.
+                startTracking(activePackageName, countAsReentry = false)
+                showPendingMarathonReminderIfDue()
             }
             scheduleFocusReminder()
             schedulePendingMarathonReminder()
+            handler.removeCallbacks(flushTimer)
             handler.postDelayed(flushTimer, CHECKPOINT_INTERVAL_MILLIS)
         } catch (e: Exception) {
             AccessibilityDiagnostics.record("Error in onServiceConnected: ${e.message}")
@@ -155,77 +179,146 @@ class ScrollAccessibilityService : AccessibilityService() {
             }
             return
         }
-        val platform = FeedDetector.platformFor(packageName)
+        // Content changes (e.g. a playing video) never start a session; they're only used to spot
+        // Shorts-style page swaps in the app already being tracked.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            if (packageName == trackingPackage) checkPagerPage(packageName)
+            return
+        }
+
+        // Apps can send window events while in the background (e.g. as they close behind the
+        // launcher). Only treat one as "the user is here" if that app is actually in front; if the
+        // window isn't settled yet, look again shortly.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val active = activeWindowPackage()
+            if (active != null && active != packageName && active !in systemOverlayPackages) {
+                handler.removeCallbacks(resumeTrackingIfForeground)
+                handler.postDelayed(resumeTrackingIfForeground, FOREGROUND_RECHECK_MILLIS)
+                return
+            }
+        }
+        if (packageName == trackingPackage) markInApp()
 
         val focusSession = repository.activeFocusSession()
         if (focusSession != null) {
             if (!focusSession.isPaused) {
                 startTracking(packageName)
                 showFocusInterruptionPrompt()
-                return
             } else if (focusSession.reminderAtMillis > 0L && System.currentTimeMillis() >= focusSession.reminderAtMillis) {
                 repository.resumeFocusSession()
                 startTracking(packageName)
                 showFocusInterruptionPrompt()
-                return
             }
-            // On scroll break (focusSession.isPaused) -> allow browsing during break without prompt
+            // On scroll break (focusSession.isPaused) -> allow browsing during break without prompt.
+            // Either way the time and scrolls below are recorded like any other use of the app.
         }
 
-        val appForegroundEvent = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-        val continuingTrackedFeed = event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED &&
-            platform != null && trackingPackage == packageName && trackingFeedActive
-        val sourceLabels = if (continuingTrackedFeed) "" else FeedDetector.visibleLabels(event.source)
-        val windowLabels = if (continuingTrackedFeed) "" else FeedDetector.visibleLabels(rootInActiveWindow)
-        val visibleLabels = listOf(sourceLabels, windowLabels)
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            recordWindowDiagnostics(event, packageName)
+        }
+
+        // Every moment in a tracked app counts as screen time and every vertical scroll gesture
+        // in it counts as a scroll, whichever screen of the app it happens on.
+        cancelPendingStop()
+        startTracking(packageName)
+        showPendingMarathonReminderIfDue()
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED && isVerticalScroll(event)) {
+            countScrollGesture(packageName, event)
+        }
+    }
+
+    /**
+     * Some full-screen video pagers (YouTube Shorts) swap pages without sending scroll events.
+     * Each page is its own view, so a different page filling the screen means one swipe.
+     */
+    private fun checkPagerPage(packageName: String) {
+        val pagerId = FeedDetector.platformFor(packageName)?.pagerViewId ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastPagerCheckAt < PAGER_CHECK_INTERVAL_MILLIS) return
+        lastPagerCheckAt = now
+        val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return
+        if (root.packageName?.toString() != packageName) return
+        val pager = try { root.findAccessibilityNodeInfosByViewId(pagerId).firstOrNull() } catch (_: Exception) { null }
+        if (pager == null) {
+            currentPagerPage = null
+            return
+        }
+        val screenHeight = resources.displayMetrics.heightPixels
+        val bounds = android.graphics.Rect()
+        var page: AccessibilityNodeInfo? = null
+        var pageHeight = 0
+        for (i in 0 until pager.childCount) {
+            val child = try { pager.getChild(i) } catch (_: Exception) { null } ?: continue
+            child.getBoundsInScreen(bounds)
+            val visible = (minOf(bounds.bottom, screenHeight) - maxOf(bounds.top, 0)).coerceAtLeast(0)
+            if (visible > pageHeight) {
+                page = child
+                pageHeight = visible
+            }
+        }
+        // Only a settled page (mostly on screen) counts, so a half-finished swipe isn't counted.
+        if (page == null || pageHeight < screenHeight / 2) return
+        val previous = currentPagerPage
+        currentPagerPage = page
+        if (previous != null && previous != page) {
+            sessionScrollCount++
+            trackingActivityId?.let(repository::recordSessionScroll)
+            maybeShowDailyLimitPrompt()
+            AccessibilityDiagnostics.record("Scroll decision: COUNTED\nPackage: $packageName\nPager page changed")
+        }
+    }
+
+    /**
+     * Counts one scroll per gesture. A swipe or fling reports a stream of scroll events (every
+     * ~100 ms) whose distance shrinks as it slows down, so a long fling through a list counts
+     * once, the same as one snap in a short-video feed. A new gesture starts when:
+     * - the stream has been quiet for [SCROLL_GESTURE_GAP_MILLIS], or
+     * - the direction flips, or
+     * - the distance jumps back up after a fling's slow tail (the user swiped again before the
+     *   previous fling stopped, which leaves almost no quiet gap).
+     */
+    private fun countScrollGesture(packageName: String, event: AccessibilityEvent) {
+        val now = SystemClock.elapsedRealtime()
+        val delta = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) event.scrollDeltaY else 0
+        val previous = lastScrollDeltaY
+        val quietGap = now - lastScrollEventAt > SCROLL_GESTURE_GAP_MILLIS
+        val directionFlipped = delta != 0 && previous != 0 && (delta > 0) != (previous > 0)
+        val freshSwipe = kotlin.math.abs(previous) < dp(GESTURE_TAIL_DP) &&
+            kotlin.math.abs(delta) >= dp(GESTURE_SWIPE_DP) &&
+            kotlin.math.abs(delta) >= kotlin.math.abs(previous) * 3
+        lastScrollEventAt = now
+        lastScrollDeltaY = delta
+        if (!quietGap && !directionFlipped && !freshSwipe) return
+        trackingActivityId?.let(repository::recordSessionScroll)
+        sessionScrollCount++
+        maybeShowDailyLimitPrompt()
+        AccessibilityDiagnostics.record(
+            "Scroll decision: COUNTED\n" +
+                "Package: $packageName\n" +
+                "Delta: ${scrollDeltaDescription(event)}\n" +
+                "Gesture gap: passed (> ${SCROLL_GESTURE_GAP_MILLIS}ms quiet)"
+        )
+    }
+
+    private fun recordWindowDiagnostics(event: AccessibilityEvent, packageName: String) {
+        val platform = FeedDetector.platformFor(packageName)
+        val visibleLabels = listOf(
+            FeedDetector.visibleLabels(event.source),
+            FeedDetector.visibleLabels(rootInActiveWindow)
+        )
             .filter(String::isNotBlank)
             .distinct()
             .joinToString(" | ")
             .take(MAX_COMBINED_LABEL_LENGTH)
-        val feedVisible = continuingTrackedFeed ||
-            (platform != null && event.eventType in FEED_DETECTION_EVENT_TYPES &&
-                FeedDetector.isShortFormFeed(visibleLabels, platform))
-        val feedMatch = if (continuingTrackedFeed || platform == null) null
-            else FeedDetector.feedMatch(visibleLabels, platform)
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            AccessibilityDiagnostics.record(
-                "Package: $packageName\n" +
-                    "Event: ${eventTypeName(event.eventType)} (${event.eventType})\n" +
-                    "App: ${resolveAppLabel(packageName)}\n" +
-                    "Feed visible: $feedVisible\n" +
-                    "Matching feed label: ${feedMatch ?: "none"}\n" +
-                    "Visible labels: ${visibleLabels.ifBlank { "(none exposed by this event)" }}"
-            )
-        }
-
-        val countableAppScroll = platform == null &&
-            event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
-        if (!appForegroundEvent && !feedVisible && !continuingTrackedFeed && !countableAppScroll) {
-            return
-        }
-
-        handler.removeCallbacks(delayedStop)
-        startTracking(packageName)
-        trackingFeedActive = feedVisible
-        showPendingMarathonReminderIfDue()
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED &&
-            (platform == null || feedVisible) && isVerticalScroll(event)
-        ) {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastScrollAt > SCROLL_DEBOUNCE_MILLIS) {
-                repository.addScroll(packageName)
-                trackingActivityId?.let(repository::recordSessionScroll)
-                sessionScrollCount++
-                lastScrollAt = now
-                maybeShowDailyLimitPrompt()
-                AccessibilityDiagnostics.record(
-                    "Scroll decision: COUNTED\n" +
-                        "Package: $packageName\n" +
-                        "Delta: ${scrollDeltaDescription(event)}\n" +
-                        "Debounce: passed (> ${SCROLL_DEBOUNCE_MILLIS}ms)"
-                )
-            }
-        }
+        val feedMatch = platform?.let { FeedDetector.feedMatch(visibleLabels, it) }
+        AccessibilityDiagnostics.record(
+            "Package: $packageName\n" +
+                "Event: ${eventTypeName(event.eventType)} (${event.eventType})\n" +
+                "App: ${resolveAppLabel(packageName)}\n" +
+                "Short-form feed visible: ${feedMatch != null}\n" +
+                "Matching feed label: ${feedMatch ?: "none"}\n" +
+                "Visible labels: ${visibleLabels.ifBlank { "(none exposed by this event)" }}"
+        )
     }
 
     override fun onInterrupt() = stopTracking()
@@ -244,22 +337,26 @@ class ScrollAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun startTracking(packageName: String) {
-        if (trackingPackage == packageName) return
+    private fun startTracking(packageName: String, countAsReentry: Boolean = true) {
+        if (trackingPackage == packageName) {
+            cancelPendingStop()
+            return
+        }
         stopTracking()
 
         val nowWall = System.currentTimeMillis()
-        val session = repository.beginSession(packageName, nowWall)
+        val session = repository.beginSession(packageName, nowWall, countAsReentry)
         trackingPackage = packageName
-        trackingPlatform = FeedDetector.platformFor(packageName)
         trackingAppLabel = resolveAppLabel(packageName)
         trackingActivityId = session.activityId
         trackingStartedAtElapsed = SystemClock.elapsedRealtime()
-        trackingFeedActive = false
         trackingStartedAtWall = nowWall
-        lastCheckpointElapsed = trackingStartedAtElapsed
+        lastInAppElapsed = trackingStartedAtElapsed
+        lastInAppWall = nowWall
         sessionScrollCount = 0
-        lastScrollAt = 0L
+        lastScrollEventAt = 0L
+        lastScrollDeltaY = 0
+        currentPagerPage = null
         lastLegacyScrollPosition = null
         marathonReminderShown = false
 
@@ -270,16 +367,21 @@ class ScrollAccessibilityService : AccessibilityService() {
 //        if (session.isRapidReentry) showPauseOverlay()
     }
 
-    private fun stopTracking() {
-        handler.removeCallbacks(delayedStop)
+    /**
+     * Ends the current session. [endElapsed]/[endWall] let a caller end it at the moment the user
+     * actually left (e.g. before a grace period or a stretch with no foreground signal).
+     */
+    private fun stopTracking(
+        endElapsed: Long = SystemClock.elapsedRealtime(),
+        endWall: Long = System.currentTimeMillis()
+    ) {
+        cancelPendingStop()
         val activityId = trackingActivityId
         if (activityId != null) {
-            val nowElapsed = SystemClock.elapsedRealtime()
-            val duration = maxOf(0L, nowElapsed - trackingStartedAtElapsed)
-            repository.addActiveMillis(maxOf(0L, nowElapsed - lastCheckpointElapsed))
+            val duration = maxOf(0L, endElapsed - trackingStartedAtElapsed)
             repository.finishSession(
                 activityId,
-                System.currentTimeMillis(),
+                maxOf(endWall, trackingStartedAtWall),
                 duration,
                 sessionScrollCount
             )
@@ -289,21 +391,34 @@ class ScrollAccessibilityService : AccessibilityService() {
             )
         }
         trackingPackage = null
-        trackingPlatform = null
         trackingAppLabel = null
         trackingActivityId = null
         trackingStartedAtElapsed = 0L
         trackingStartedAtWall = 0L
-        trackingFeedActive = false
-        lastCheckpointElapsed = 0L
         sessionScrollCount = 0
         marathonReminderShown = false
     }
 
     private fun scheduleStopTracking() {
-        handler.removeCallbacks(delayedStop)
+        if (pendingStopElapsed > 0L) return  // already leaving; keep the original leave time
+        pendingStopElapsed = SystemClock.elapsedRealtime()
+        pendingStopWall = System.currentTimeMillis()
         handler.postDelayed(delayedStop, FEED_EXIT_GRACE_MILLIS)
     }
+
+    /** Notes that the tracked app was just seen in use (an event from it, or it's in front). */
+    private fun markInApp() {
+        lastInAppElapsed = SystemClock.elapsedRealtime()
+        lastInAppWall = System.currentTimeMillis()
+    }
+
+    private fun cancelPendingStop() {
+        handler.removeCallbacks(delayedStop)
+        pendingStopElapsed = 0L
+    }
+
+    private fun activeWindowPackage(): String? =
+        try { rootInActiveWindow?.packageName?.toString() } catch (_: Exception) { null }
 
     private fun updatePackageFilters() {
         val info = serviceInfo ?: return
@@ -387,14 +502,25 @@ class ScrollAccessibilityService : AccessibilityService() {
         val activityId = trackingActivityId ?: return
         val nowElapsed = SystemClock.elapsedRealtime()
 
-        if (nowElapsed - lastEventElapsed > INACTIVITY_TIMEOUT_MILLIS) {
-            AccessibilityDiagnostics.record("Inactivity timeout (>30s) -> stopping active session")
-            stopTracking()
-            return
+        // Watching a video sends no events, so silence alone doesn't mean the user left. Ask which
+        // app is in front; only fall back to an idle timeout when that can't be determined.
+        val activePackage = activeWindowPackage()
+        when {
+            activePackage == trackingPackage -> markInApp()
+            activePackage != null && activePackage !in systemOverlayPackages -> {
+                // The switch was missed; end the session when the app was last seen in use.
+                AccessibilityDiagnostics.record("$activePackage is in front -> stopping active session")
+                if (pendingStopElapsed > 0L) stopTracking(pendingStopElapsed, pendingStopWall)
+                else stopTracking(lastInAppElapsed, lastInAppWall)
+                return
+            }
+            nowElapsed - lastEventElapsed > INACTIVITY_TIMEOUT_MILLIS -> {
+                AccessibilityDiagnostics.record("No foreground signal or events -> stopping active session")
+                val idleFor = nowElapsed - lastEventElapsed
+                stopTracking(lastEventElapsed, System.currentTimeMillis() - idleFor)
+                return
+            }
         }
-
-        val deltaMillis = (nowElapsed - lastCheckpointElapsed).coerceAtMost(CHECKPOINT_INTERVAL_MILLIS + 5_000L)
-        repository.addActiveMillis(maxOf(0L, deltaMillis))
         val duration = maxOf(0L, nowElapsed - trackingStartedAtElapsed)
         repository.checkpointSession(
             activityId,
@@ -402,7 +528,6 @@ class ScrollAccessibilityService : AccessibilityService() {
             duration,
             sessionScrollCount
         )
-        lastCheckpointElapsed = nowElapsed
 
         maybeShowDailyLimitPrompt()
         maybeShowMarathonReminder(nowElapsed)
@@ -430,9 +555,9 @@ class ScrollAccessibilityService : AccessibilityService() {
         trackingActivityId = newSession.activityId
         trackingStartedAtElapsed = newStartElapsed
         trackingStartedAtWall = todayStart
-        lastCheckpointElapsed = nowElapsed
         sessionScrollCount = 0
-        lastScrollAt = 0L
+        lastScrollEventAt = 0L
+        lastScrollDeltaY = 0
         repository.checkpointSession(
             newSession.activityId,
             nowWall,
@@ -1029,7 +1154,17 @@ class ScrollAccessibilityService : AccessibilityService() {
     private companion object {
         const val FOCUS_NOTIFICATION_CHANNEL_ID = "scroll_starva_focus"
         const val FOCUS_RESUMED_NOTIFICATION_ID = 1001
-        const val INACTIVITY_TIMEOUT_MILLIS = 30_000L
+        /** Idle fallback, used only when the foreground app can't be read. */
+        const val INACTIVITY_TIMEOUT_MILLIS = 3 * 60_000L
+
+        /** Delay after the screen turns on before checking which app is in front. */
+        const val SCREEN_ON_SETTLE_MILLIS = 800L
+
+        /** Minimum time between pager page checks (they run on content-change events). */
+        const val PAGER_CHECK_INTERVAL_MILLIS = 250L
+
+        /** Delay before re-checking the foreground app when a window event arrives mid-switch. */
+        const val FOREGROUND_RECHECK_MILLIS = 600L
 
         /** A card shown within this window of the previous one greets more quietly. */
         const val PROMPT_REPEAT_WINDOW_MILLIS = 20 * 60_000L
@@ -1039,17 +1174,17 @@ class ScrollAccessibilityService : AccessibilityService() {
         const val PIP_PROMPT_PREFS = "pip_prompt_guide"
         const val KEY_PROMPT_CARDS_SEEN = "cards_seen"
 
-        /** Set of accessibility event types used to detect active short-form feed navigation. */
-        val FEED_DETECTION_EVENT_TYPES = setOf(
-            AccessibilityEvent.TYPE_VIEW_SCROLLED,
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-        )
-
         /** Interval in milliseconds for checking active session progress and updating checkpoints. */
         const val CHECKPOINT_INTERVAL_MILLIS = 10_000L
 
-        /** Minimum time threshold in milliseconds between scroll strokes to prevent duplicate counts. */
-        const val SCROLL_DEBOUNCE_MILLIS = 750L
+        /** Quiet time between scroll events after which the next event starts a new gesture. */
+        const val SCROLL_GESTURE_GAP_MILLIS = 300L
+
+        /** A scroll step smaller than this is the slow tail of a fling. */
+        const val GESTURE_TAIL_DP = 24
+
+        /** A step at least this large right after a tail is a new swipe. */
+        const val GESTURE_SWIPE_DP = 48
 
         /** Grace period in milliseconds before concluding a session when exiting a tracked app. */
         const val FEED_EXIT_GRACE_MILLIS = 2_500L
@@ -1068,9 +1203,13 @@ class ScrollAccessibilityService : AccessibilityService() {
     )
 }
 
-enum class FeedPlatform(val packageName: String, val label: String) {
+/**
+ * @property pagerViewId View id of a full-screen video pager that changes pages without sending
+ * scroll events (YouTube Shorts); page changes there are counted as scrolls instead.
+ */
+enum class FeedPlatform(val packageName: String, val label: String, val pagerViewId: String? = null) {
     TIKTOK("com.zhiliaoapp.musically", "TikTok"),
-    YOUTUBE("com.google.android.youtube", "YouTube"),
+    YOUTUBE("com.google.android.youtube", "YouTube", "com.google.android.youtube:id/reel_recycler"),
     INSTAGRAM("com.instagram.android", "Instagram"),
     FACEBOOK("com.facebook.katana", "Facebook")
 }
