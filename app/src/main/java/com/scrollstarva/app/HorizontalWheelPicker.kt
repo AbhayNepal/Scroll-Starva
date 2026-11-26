@@ -39,7 +39,8 @@ class HorizontalWheelPicker(
         val heading = TextView(context).apply {
             text = label
             textSize = 12f
-            setTextColor(0xFF65727E.toInt())
+            setTextColor(Ui.INK_3)
+            typeface = Ui.font(context, 600)
             gravity = Gravity.CENTER
         }
         addView(heading, LayoutParams(-1, dp(18)))
@@ -79,8 +80,8 @@ class HorizontalWheelPicker(
         private var isHorizontalDrag = false
         private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
         private var settlingAnimator: ValueAnimator? = null
-        private var selectedColor = 0xFFC94D43.toInt()
-        private var secondaryColor = 0xFF65727E.toInt()
+        private var selectedColor = Ui.BRAND_DEEP
+        private var secondaryColor = Ui.INK_3
 
         init {
             isFocusable = true
@@ -113,20 +114,19 @@ class HorizontalWheelPicker(
             val selectorWidth = dp(76).toFloat()
             val selectorHeight = dp(34).toFloat()
 
-            selectorPaint.color = 0xFFF1D8C5.toInt()
+            val selector = RectF(
+                centerX - selectorWidth / 2f,
+                centerY - selectorHeight / 2f,
+                centerX + selectorWidth / 2f,
+                centerY + selectorHeight / 2f
+            )
+            selectorPaint.color = Ui.BRAND_TINT
+            selectorPaint.style = Paint.Style.FILL
+            canvas.drawRoundRect(selector, dp(12).toFloat(), dp(12).toFloat(), selectorPaint)
+            selectorPaint.color = Ui.BRAND_SOFT
             selectorPaint.style = Paint.Style.STROKE
             selectorPaint.strokeWidth = dp(1).toFloat()
-            canvas.drawRoundRect(
-                RectF(
-                    centerX - selectorWidth / 2f,
-                    centerY - selectorHeight / 2f,
-                    centerX + selectorWidth / 2f,
-                    centerY + selectorHeight / 2f
-                ),
-                dp(10).toFloat(),
-                dp(10).toFloat(),
-                selectorPaint
-            )
+            canvas.drawRoundRect(selector, dp(12).toFloat(), dp(12).toFloat(), selectorPaint)
             selectorPaint.style = Paint.Style.FILL
 
             val visualOffset = dragOffset * itemSpacing / stepDistance
@@ -144,11 +144,7 @@ class HorizontalWheelPicker(
                 } else {
                     dp((20f - distance * 3f)).toFloat()
                 }
-                textPaint.typeface = if (offset == 0 && abs(dragOffset) < stepDistance / 2f) {
-                    android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
-                } else {
-                    android.graphics.Typeface.DEFAULT
-                }
+                textPaint.typeface = Ui.font(context, if (offset == 0 && abs(dragOffset) < stepDistance / 2f) 700 else 500)
                 textPaint.color = if (distance < .45f) selectedColor else secondaryColor
                 textPaint.alpha = (255 - distance.toInt() * 68).coerceAtLeast(65)
                 canvas.drawText(

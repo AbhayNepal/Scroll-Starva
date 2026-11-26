@@ -504,18 +504,18 @@ private class SpeechBubble(context: Context) : LinearLayout(context) {
             textSize = 10f
             letterSpacing = 0.16f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#E4604F"))
+            setTextColor(Ui.BRAND_DEEP)
         }
         addView(badgeView)
         titleView.apply {
             textSize = 17f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#17202A"))
+            setTextColor(Ui.INK)
             setPadding(0, (2 * d).toInt(), 0, (2 * d).toInt())
         }
         addView(titleView)
         text.textSize = 15f
-        text.setTextColor(Color.parseColor("#2F3A45"))
+        text.setTextColor(Ui.INK_2)
         text.setLineSpacing(0f, 1.18f)
         addView(text, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
             topMargin = (2 * d).toInt()
@@ -568,10 +568,10 @@ private class SpeechBubble(context: Context) : LinearLayout(context) {
         setTypeface(typeface, Typeface.BOLD)
         gravity = Gravity.CENTER
         setPadding((16 * d).toInt(), 0, (16 * d).toInt(), 0)
-        setTextColor(if (action.primary) Color.WHITE else Color.parseColor("#65727E"))
+        setTextColor(if (action.primary) Color.WHITE else Ui.INK_2)
         background = GradientDrawable().apply {
             cornerRadius = 20 * d
-            setColor(if (action.primary) Color.parseColor("#F26B5E") else Color.TRANSPARENT)
+            setColor(if (action.primary) Ui.BRAND else Color.TRANSPARENT)
         }
         setOnClickListener { action.onClick() }
     }
@@ -589,7 +589,7 @@ private class BubbleBackground(context: Context) : Drawable() {
     private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1.2f * d
-        color = Color.parseColor("#FFD9CF")
+        color = Ui.BORDER
     }
     private val path = Path()
     private val rect = RectF()

@@ -42,14 +42,17 @@ import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.pow
 
-private enum class DashboardTab(val title: String, val heading: String, val subtitle: String) {
-    OVERVIEW("Home", "Your mindful day", "Small choices can build a steadier relationship with your attention."),
-    TIME("Time", "Time in supported apps", "Notice your time patterns without judging yourself."),
-    SCROLLS("Scrolls", "Your scrolling activity", "Every pause and choice is part of your progress."),
-    PROGRESS("Progress", "Your progress", "Progress is personal. Small steps still count.")
+private enum class DashboardTab(val title: String, val heading: String, val subtitle: String, val icon: Int) {
+    OVERVIEW("Home", "Your mindful day", "Small choices can build a steadier relationship with your attention.", R.drawable.ic_home),
+    TIME("Time", "Time in supported apps", "Notice your time patterns without judging yourself.", R.drawable.ic_schedule),
+    SCROLLS("Scrolls", "Your scrolling activity", "Every pause and choice is part of your progress.", R.drawable.ic_swap_vert),
+    PROGRESS("Progress", "Your progress", "Progress is personal. Small steps still count.", R.drawable.ic_trending_up)
 }
 
 private enum class ChartStyle { BARS, LINE }
+
+/** One bottom-navigation item's parts, restyled when the selected tab changes. */
+private class NavItem(val tab: DashboardTab, val pill: FrameLayout, val icon: ImageView, val label: TextView)
 
 private data class ChartPoint(val label: String, val value: Float, val detailLabel: String = label)
 
@@ -65,7 +68,8 @@ private data class OnboardingTourStepData(
     val title: String,
     val message: String,
     val nextButtonText: String,
-    val cardIndex: Int
+    /** Tag of the view on [tab] that the tour spotlights. */
+    val target: String
 )
 
 /**
@@ -144,6 +148,7 @@ class MainActivity : android.app.Activity() {
     private lateinit var pageHeading: TextView
     private lateinit var pageSubtitle: TextView
     private lateinit var navigationBar: LinearLayout
+    private val navItems = mutableListOf<NavItem>()
     private lateinit var buddyView: PipView
     private var pipCompanion: PipCompanion? = null
     private lateinit var buddyAnchor: View
@@ -184,7 +189,7 @@ class MainActivity : android.app.Activity() {
             title = "Welcome to Scroll Starva",
             message = "Pip is here to help you build a calmer relationship with your phone. Your daily flame stays lit as long as you stay within your mindful goals.",
             nextButtonText = "Next: Daily Limits →",
-            cardIndex = 0
+            target = TOUR_GOALS
         ),
         OnboardingTourStepData(
             tab = DashboardTab.OVERVIEW,
@@ -192,7 +197,7 @@ class MainActivity : android.app.Activity() {
             title = "Track Your Daily Limits",
             message = "Here are your daily scroll and app time targets. As you check supported feeds, these numbers update live so you always know where you stand.",
             nextButtonText = "Next: Time Tab →",
-            cardIndex = 1
+            target = TOUR_LIMITS
         ),
         OnboardingTourStepData(
             tab = DashboardTab.TIME,
@@ -200,7 +205,7 @@ class MainActivity : android.app.Activity() {
             title = "Understand Your Time",
             message = "Welcome to the Time tab! This chart shows your daily screen time in supported apps over the last 15 days, helping you spot patterns without judgment.",
             nextButtonText = "Next: Scrolls & Thumb Travel →",
-            cardIndex = 2
+            target = TOUR_TIME_CHART
         ),
         OnboardingTourStepData(
             tab = DashboardTab.SCROLLS,
@@ -208,7 +213,7 @@ class MainActivity : android.app.Activity() {
             title = "Scrolls & Thumb Travel",
             message = "On the Scrolls tab, you can view your total scroll flicks for today along with your estimated thumb travel distance in kilometers. Every pause is a win!",
             nextButtonText = "Next: App Breakdown →",
-            cardIndex = 0
+            target = TOUR_SCROLLS_TODAY
         ),
         OnboardingTourStepData(
             tab = DashboardTab.SCROLLS,
@@ -216,7 +221,7 @@ class MainActivity : android.app.Activity() {
             title = "Scrolls by App Today",
             message = "This section breaks down your scrolling activity app by app, showing you exactly which apps consume the most attention during your daily routines.",
             nextButtonText = "Next: Progress Tab →",
-            cardIndex = 2
+            target = TOUR_SCROLLS_BY_APP
         ),
         OnboardingTourStepData(
             tab = DashboardTab.PROGRESS,
@@ -224,7 +229,7 @@ class MainActivity : android.app.Activity() {
             title = "Customize Tracked Apps",
             message = "Welcome to Progress! Tap 'Choose apps' here to select which social apps count toward your time, goals, and scroll totals.",
             nextButtonText = "Next: Daily Goals →",
-            cardIndex = 1
+            target = TOUR_APPS
         ),
         OnboardingTourStepData(
             tab = DashboardTab.PROGRESS,
@@ -232,7 +237,7 @@ class MainActivity : android.app.Activity() {
             title = "Set Daily Goals",
             message = "Here you can set your target max scrolls and maximum foreground time limits per day to keep your digital routine balanced.",
             nextButtonText = "Next: Break Reminders →",
-            cardIndex = 3
+            target = TOUR_GOAL_SETTINGS
         ),
         OnboardingTourStepData(
             tab = DashboardTab.PROGRESS,
@@ -240,7 +245,7 @@ class MainActivity : android.app.Activity() {
             title = "Feed Break Reminders",
             message = "Set this reminder slider so Pip can gently check in with you during long feed sessions when you've been scrolling continuously.",
             nextButtonText = "Next: Focus Sessions →",
-            cardIndex = 5
+            target = TOUR_REMINDER
         ),
         OnboardingTourStepData(
             tab = DashboardTab.PROGRESS,
@@ -248,7 +253,7 @@ class MainActivity : android.app.Activity() {
             title = "Start a Focus Session",
             message = "When you want to step away from all social feeds, pick a focus duration here and tap Start Focus to give your full attention to what matters.",
             nextButtonText = "Next: Mindful Score →",
-            cardIndex = 6
+            target = TOUR_FOCUS
         ),
         OnboardingTourStepData(
             tab = DashboardTab.PROGRESS,
@@ -256,7 +261,7 @@ class MainActivity : android.app.Activity() {
             title = "Habit Taper Index (Mindful Score)",
             message = "This is your Habit Taper Index—your daily 0–100 mindful score. It rewards longer breaks between app opens, fewer marathon sessions, and a calmer scroll pace!",
             nextButtonText = "Complete Tour 🎉",
-            cardIndex = 7
+            target = TOUR_SCORE
         )
     )
 
@@ -374,21 +379,27 @@ class MainActivity : android.app.Activity() {
         rootFrame = FrameLayout(this)
         dashboardRoot = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(CREAM)
+            setBackgroundColor(Ui.BG)
         }
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(24), dp(24), dp(16))
-        }
-        val brandRow = LinearLayout(this).apply {
+
+        // Top bar: wordmark and date, then the focus heart and Pip's perch.
+        val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(10), dp(14), dp(2))
         }
-        brandRow.addView(TextView(this).apply {
-            text = brandTitleText()
-            textSize = 12f
-            letterSpacing = .18f
-            setTextColor(CORAL_DARK)
+        topBar.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(Ui.text(this@MainActivity, "Scroll Starva", Ui.Type.TITLE).apply {
+                typeface = Ui.font(this@MainActivity, 800)
+            })
+            addView(Ui.text(
+                this@MainActivity,
+                java.time.LocalDate.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())
+                ),
+                Ui.Type.CAPTION
+            ).apply { setPadding(0, dp(3), 0, 0) })
         }, LinearLayout.LayoutParams(0, -2, 1f))
         headerHeartView = FocusHeartView(this).apply {
             val completedSeconds = repository.todayFocusSeconds()
@@ -398,49 +409,44 @@ class MainActivity : android.app.Activity() {
             contentDescription = "Mindful Focus Heart. Tap to view progress or start focus timer."
             setOnClickListener { showFocusHeartPopup() }
         }
-        brandRow.addView(headerHeartView, LinearLayout.LayoutParams(dp(44), dp(44)).apply {
-            marginEnd = dp(10)
+        topBar.addView(headerHeartView, LinearLayout.LayoutParams(dp(42), dp(42)).apply {
+            marginEnd = dp(6)
         })
         // Pip itself lives in an overlay above the dashboard (so it can fly); this is its perch.
         buddyAnchor = View(this)
-        brandRow.addView(buddyAnchor, LinearLayout.LayoutParams(dp(64), dp(64)))
-        header.addView(brandRow)
-        pageHeading = TextView(this).apply {
-            textSize = 29f
-            setTextColor(INK)
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(10), 0, dp(4))
-        }
-        header.addView(pageHeading)
-        pageSubtitle = TextView(this).apply {
-            textSize = 14f
-            setTextColor(MUTED)
-        }
-        header.addView(pageSubtitle)
-        dashboardRoot.addView(header)
+        topBar.addView(buddyAnchor, LinearLayout.LayoutParams(dp(60), dp(60)))
+        dashboardRoot.addView(topBar)
 
-        pageScroll = ScrollView(this)
+        pageScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            clipToPadding = false
+        }
+        val scrollColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        pageHeading = Ui.text(this, "", Ui.Type.HEADLINE)
+        pageSubtitle = Ui.text(this, "", Ui.Type.BODY).apply { setPadding(0, dp(6), 0, 0) }
+        scrollColumn.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(8))
+            addView(pageHeading)
+            addView(pageSubtitle)
+        })
         pageContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), dp(20))
+            setPadding(dp(16), dp(4), dp(16), dp(28))
         }
-        pageScroll.addView(pageContent)
+        scrollColumn.addView(pageContent)
+        pageScroll.addView(scrollColumn)
         dashboardRoot.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
+        dashboardRoot.addView(View(this).apply { setBackgroundColor(Ui.BORDER) }, LinearLayout.LayoutParams(-1, dp(1)))
         navigationBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12), dp(10), dp(12), dp(12))
-            setBackgroundColor(Color.WHITE)
-            elevation = dp(8).toFloat()
+            setPadding(dp(8), dp(8), dp(8), dp(10))
+            setBackgroundColor(Ui.SURFACE)
         }
+        navItems.clear()
         DashboardTab.entries.forEach { tab ->
-            navigationBar.addView(
-                navButton(tab),
-                LinearLayout.LayoutParams(0, dp(46), 1f).apply {
-                    marginStart = dp(3)
-                    marginEnd = dp(3)
-                }
-            )
+            navigationBar.addView(navButton(tab), LinearLayout.LayoutParams(0, -2, 1f))
         }
         dashboardRoot.addView(navigationBar)
         rootFrame.addView(dashboardRoot, FrameLayout.LayoutParams(-1, -1))
@@ -509,23 +515,17 @@ class MainActivity : android.app.Activity() {
         column.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(20), dp(24), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = stepLabel
-                textSize = 11f
-                letterSpacing = .18f
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(CORAL_DARK)
-            })
+            addView(Ui.text(this@MainActivity, stepLabel, Ui.Type.OVERLINE, Ui.BRAND_DEEP))
             if (stepIndex != null) {
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     for (i in 0 until stepCount) {
                         addView(View(this@MainActivity).apply {
                             background = roundedBackground(
-                                if (i <= stepIndex) CORAL else Color.parseColor("#F3E3DA"),
-                                dp(3).toFloat()
+                                if (i <= stepIndex) Ui.BRAND else Ui.BORDER,
+                                dp(2).toFloat()
                             )
-                        }, LinearLayout.LayoutParams(0, dp(6), 1f).apply {
+                        }, LinearLayout.LayoutParams(0, dp(4), 1f).apply {
                             if (i > 0) marginStart = dp(6)
                         })
                     }
@@ -543,7 +543,7 @@ class MainActivity : android.app.Activity() {
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(4), dp(20), dp(16))
+            setPadding(dp(16), dp(4), dp(16), dp(16))
         }
         column.addView(ScrollView(this).apply {
             isFillViewport = true
@@ -554,8 +554,10 @@ class MainActivity : android.app.Activity() {
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(10), dp(20), dp(18))
+            setPadding(dp(20), dp(12), dp(20), dp(18))
+            setBackgroundColor(Ui.BG)
         }
+        column.addView(View(this).apply { setBackgroundColor(Ui.BORDER) }, LinearLayout.LayoutParams(-1, dp(1)))
         column.addView(buttons, LinearLayout.LayoutParams(-1, -2))
 
         val stage = PipStage(this, root, anchor, pipSizeDp = 96)
@@ -569,57 +571,27 @@ class MainActivity : android.app.Activity() {
 
     private fun onboardingTitle(title: String, subtitle: String) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        addView(TextView(this@MainActivity).apply {
-            text = title
-            textSize = 26f
-            setTextColor(INK)
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        addView(TextView(this@MainActivity).apply {
-            text = subtitle
-            textSize = 15f
-            setTextColor(MUTED)
-            setLineSpacing(0f, 1.15f)
-            setPadding(0, dp(6), 0, dp(8))
-        })
+        setPadding(dp(4), 0, dp(4), dp(10))
+        addView(Ui.text(this@MainActivity, title, Ui.Type.HEADLINE))
+        addView(Ui.text(this@MainActivity, subtitle, Ui.Type.BODY).apply { setPadding(0, dp(8), 0, 0) })
     }
 
-    private fun onboardingSectionLabel(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 11f
-        letterSpacing = .16f
-        setTypeface(typeface, Typeface.BOLD)
-        setTextColor(CORAL_DARK)
-        setPadding(0, 0, 0, dp(8))
+    private fun onboardingSectionLabel(text: String) = Ui.text(this, text, Ui.Type.OVERLINE).apply {
+        setPadding(0, 0, 0, dp(10))
     }
 
-    private fun onboardingPrimaryButton(text: String, action: () -> Unit) = actionButton(text, action).apply {
-        textSize = 16f
-        setTypeface(typeface, Typeface.BOLD)
-        background = roundedBackground(CORAL, dp(16).toFloat())
-        stateListAnimator = null
-        minHeight = dp(54)
-    }
+    private fun onboardingPrimaryButton(text: String, action: () -> Unit): View =
+        actionButton(text, Ui.ButtonStyle.PRIMARY, action = action)
 
-    private fun onboardingSecondaryButton(text: String, action: () -> Unit) = actionButton(text, action).apply {
-        textSize = 16f
-        setTypeface(typeface, Typeface.BOLD)
-        setTextColor(CORAL_DARK)
-        background = GradientDrawable().apply {
-            setColor(Color.WHITE)
-            cornerRadius = dp(16).toFloat()
-            setStroke(dp(1), Color.parseColor("#F3C9BF"))
-        }
-        stateListAnimator = null
-        minHeight = dp(54)
-    }
+    private fun onboardingSecondaryButton(text: String, action: () -> Unit): View =
+        actionButton(text, Ui.ButtonStyle.OUTLINE, action = action)
 
     private fun setOnboardingButtons(page: OnboardingPage, back: View?, next: View) {
         page.buttons.removeAllViews()
         if (back != null) {
-            page.buttons.addView(back, LinearLayout.LayoutParams(0, dp(54), 0.38f).apply { marginEnd = dp(10) })
+            page.buttons.addView(back, LinearLayout.LayoutParams(0, dp(52), 0.38f).apply { marginEnd = dp(10) })
         }
-        page.buttons.addView(next, LinearLayout.LayoutParams(0, dp(54), 1f))
+        page.buttons.addView(next, LinearLayout.LayoutParams(0, dp(52), 1f))
     }
 
     private fun showTrackingSetupScreen() {
@@ -646,21 +618,18 @@ class MainActivity : android.app.Activity() {
         page.content.addView(card {
             addView(onboardingSectionLabel("HOW IT WORKS"))
             listOf(
-                "👀" to "Notices which of your chosen apps is open",
-                "📏" to "Counts scrolls and time so you can see your progress",
-                "🔒" to "Everything stays on this device"
-            ).forEach { (icon, line) ->
+                Triple(R.drawable.ic_visibility, Ui.VIOLET to Ui.VIOLET_SOFT, "Notices which of your chosen apps is open"),
+                Triple(R.drawable.ic_bar_chart, Ui.TEAL to Ui.TEAL_SOFT, "Counts scrolls and time so you can see your progress"),
+                Triple(R.drawable.ic_lock, Ui.SUCCESS to Ui.SUCCESS_SOFT, "Everything stays on this device")
+            ).forEach { (icon, colors, line) ->
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(0, dp(5), 0, dp(5))
-                    addView(TextView(this@MainActivity).apply {
-                        text = icon
-                        textSize = 17f
-                        gravity = Gravity.CENTER
-                        background = roundedBackground(Color.parseColor("#FFF1EA"), dp(12).toFloat())
-                    }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(12) })
-                    addView(label(line, INK, 15f), LinearLayout.LayoutParams(0, -2, 1f))
+                    setPadding(0, dp(7), 0, dp(7))
+                    addView(Ui.iconBadge(this@MainActivity, icon, colors.first, colors.second, 38f),
+                        LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(14) })
+                    addView(Ui.text(this@MainActivity, line, Ui.Type.BODY_STRONG).apply { typeface = Ui.font(this@MainActivity, 500) },
+                        LinearLayout.LayoutParams(0, -2, 1f))
                 })
             }
         })
@@ -669,6 +638,7 @@ class MainActivity : android.app.Activity() {
         val consent = CheckBox(this).apply {
             text = "I understand and consent to this on-device tracking."
             textSize = 15f
+            typeface = Ui.font(this@MainActivity, 600)
             setTextColor(INK)
             buttonTintList = android.content.res.ColorStateList.valueOf(CORAL)
             setPadding(dp(6), dp(4), 0, dp(4))
@@ -683,24 +653,20 @@ class MainActivity : android.app.Activity() {
             consentRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(8), dp(6), dp(8), dp(6))
-                background = roundedBackground(Color.parseColor("#FFF6F1"), dp(14).toFloat())
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+                background = Ui.rounded(Ui.BRAND_TINT, dp(14).toFloat(), dp(1), Ui.BRAND_SOFT)
                 addView(consent, LinearLayout.LayoutParams(-1, -2))
             }
             addView(consentRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
         })
 
-        page.content.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = roundedBackground(Color.parseColor("#F4EFE8"), dp(14).toFloat())
-            addView(label("💡", INK, 15f), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
-            addView(label(
-                "If Android says \"Restricted setting\": open Settings → Apps → Scroll Starva → ⋮ (top right) → Allow restricted settings, then try again.",
-                MUTED,
-                13f
-            ), LinearLayout.LayoutParams(0, -2, 1f))
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        page.content.addView(Ui.banner(
+            this,
+            R.drawable.ic_lightbulb,
+            "If Android says \"Restricted setting\": open Settings → Apps → Scroll Starva → ⋮ (top right) → Allow restricted settings, then try again.",
+            Ui.WARNING,
+            Ui.WARNING_SOFT
+        ))
 
         val continueButton = onboardingPrimaryButton("Continue to accessibility settings") {
             if (!consent.isChecked) {
@@ -928,7 +894,7 @@ class MainActivity : android.app.Activity() {
                     shape = GradientDrawable.OVAL
                     if (selected) setColor(CORAL) else {
                         setColor(Color.WHITE)
-                        setStroke(dp(2), Color.parseColor("#E3D6CE"))
+                        setStroke(dp(2), Ui.BORDER_STRONG)
                     }
                 }
             }
@@ -988,7 +954,7 @@ class MainActivity : android.app.Activity() {
         // Lock manual user scrolling during tour
         pageScroll.setOnTouchListener { _, _ -> true }
 
-        val targetView = pageContent.getChildAt(step.cardIndex)
+        val targetView = pageContent.findViewWithTag<View>(step.target)
         tourOverlayView?.let { rootFrame.removeView(it) }
         val overlay = SpotlightTourOverlay(this, targetView)
         rootFrame.addView(overlay, FrameLayout.LayoutParams(-1, -1))
@@ -1001,7 +967,7 @@ class MainActivity : android.app.Activity() {
         stage.hideBubble(immediately = true)
 
         pageScroll.postDelayed({
-            val targetTop = ((targetView?.top ?: 0) - dp(16)).coerceAtLeast(0)
+            val targetTop = ((targetView?.top ?: 0) + pageContent.top - dp(16)).coerceAtLeast(0)
             pageScroll.smoothScrollTo(0, targetTop)
             // Wait for the scroll to settle before Pip flies over to explain.
             pageScroll.postDelayed({
@@ -1042,16 +1008,33 @@ class MainActivity : android.app.Activity() {
         renderAppState()
     }
 
-    private fun navButton(tab: DashboardTab): Button = Button(this).apply {
-        text = tab.title
-        textSize = 12f
-        isAllCaps = false
-        minWidth = 0
-        minHeight = 0
-        setPadding(dp(2), 0, dp(2), 0)
-        setOnClickListener {
-            selectedTab = tab
-            renderTab()
+    private fun navButton(tab: DashboardTab): View {
+        val iconView = ImageView(this).apply { setImageResource(tab.icon) }
+        val pill = FrameLayout(this).apply {
+            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        }
+        val label = Ui.text(this, tab.title, Ui.Type.CAPTION).apply { gravity = Gravity.CENTER }
+        navItems += NavItem(tab, pill, iconView, label)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            isClickable = true
+            contentDescription = "${tab.title} tab"
+            background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(Color.argb(20, 0, 0, 0)), null,
+                Ui.rounded(Color.WHITE, dp(16).toFloat())
+            )
+            setPadding(0, dp(2), 0, dp(2))
+            addView(pill, LinearLayout.LayoutParams(dp(60), dp(32)))
+            addView(label, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+            setOnClickListener {
+                if (selectedTab == tab) {
+                    pageScroll.smoothScrollTo(0, 0)
+                } else {
+                    selectedTab = tab
+                    renderTab()
+                }
+            }
         }
     }
 
@@ -1082,25 +1065,24 @@ class MainActivity : android.app.Activity() {
     }
 
     private fun buildMorningRecap(recap: MorningRecap, dialog: Dialog): View {
-        val root = FrameLayout(this).apply { setBackgroundColor(CREAM) }
+        val root = FrameLayout(this).apply { setBackgroundColor(Ui.BG) }
         val scrollView = ScrollView(this).apply {
             clipToPadding = false
+            isVerticalScrollBarEnabled = false
             setPadding(0, 0, 0, dp(184))
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(12))
+            setPadding(dp(16), dp(24), dp(16), dp(12))
         }
         scrollView.addView(content)
         root.addView(scrollView, FrameLayout.LayoutParams(-1, -1))
 
-        content.addView(label("YESTERDAY · ${detailDate(recap.date).uppercase(Locale.getDefault())}", CORAL_DARK, 12f))
-        content.addView(TextView(this).apply {
-            text = "A little look back"
-            textSize = 28f
-            setTextColor(INK)
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(6), 0, dp(12))
+        content.addView(Ui.text(this, "Yesterday · ${detailDate(recap.date)}", Ui.Type.OVERLINE, Ui.BRAND_DEEP).apply {
+            setPadding(dp(4), 0, 0, 0)
+        })
+        content.addView(Ui.text(this, "A little look back", Ui.Type.HEADLINE).apply {
+            setPadding(dp(4), dp(8), 0, dp(12))
         })
         // Pip's perch for the morning greeting; his bubble appears to the right of it.
         val pipHome = View(this)
@@ -1111,13 +1093,14 @@ class MainActivity : android.app.Activity() {
 
         val focusCards = mutableListOf<View>()
         val streakCard = card {
-            addView(label("YOUR BURNING STREAK", CORAL_DARK, 12f))
+            addView(Ui.cardHeader(this@MainActivity, R.drawable.ic_flame, Ui.WARNING, Ui.WARNING_SOFT, "Your burning streak"))
             addView(GoalFlameView(this@MainActivity, recap.metGoals),
                 LinearLayout.LayoutParams(-1, dp(112)))
-            addView(metric(
-                "🔥 ${recap.streak} ${if (recap.streak == 1) "day" else "days"}",
-                28f
-            ))
+            addView(Ui.text(
+                this@MainActivity,
+                "${recap.streak} ${if (recap.streak == 1) "day" else "days"}",
+                Ui.Type.DISPLAY
+            ).apply { gravity = Gravity.CENTER })
             addView(label(
                 if (recap.metGoals) {
                     "You met both goals yesterday. Your flame is still burning."
@@ -1127,35 +1110,40 @@ class MainActivity : android.app.Activity() {
                 },
                 MUTED,
                 14f
-            ).apply { setPadding(0, dp(4), 0, 0) })
+            ).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(6), 0, 0)
+            })
         }
         content.addView(streakCard)
         focusCards += streakCard
 
         val usageCard = card {
-            addView(label("TIME & SCROLLS", CORAL_DARK, 12f))
+            addView(Ui.cardHeader(this@MainActivity, R.drawable.ic_schedule, Ui.TEAL, Ui.TEAL_SOFT, "Time & scrolls"))
             addView(metricRow(
                 "Supported-app time",
                 formatDuration(recap.metrics.activeSeconds),
                 "Scrolls",
                 recap.metrics.scrollCount.toString()
-            ))
+            ).apply { setPadding(0, dp(18), 0, 0) })
             addView(metricRow("Sessions", recap.metrics.visits.toString(), null, null).apply {
-                setPadding(0, dp(10), 0, 0)
+                setPadding(0, dp(14), 0, 0)
             })
-            addView(label(usageInsight(recap), MUTED, 14f).apply {
-                setPadding(0, dp(8), 0, 0)
+            addView(Ui.text(this@MainActivity, usageInsight(recap), Ui.Type.SMALL).apply {
+                setPadding(0, dp(14), 0, 0)
             })
         }
         content.addView(usageCard)
         focusCards += usageCard
 
         val habitCard = card {
-            addView(label("YOUR MINDFUL PATTERN", CORAL_DARK, 12f))
-            addView(metric(
+            addView(Ui.cardHeader(this@MainActivity, R.drawable.ic_sparkle, Ui.SUCCESS, Ui.SUCCESS_SOFT,
+                "Your mindful pattern", "Habit Taper Index"))
+            addView(Ui.text(
+                this@MainActivity,
                 "${recap.metrics.htiScore.toInt()} / 100",
-                27f
-            ))
+                Ui.Type.DISPLAY
+            ).apply { setPadding(0, dp(16), 0, dp(14)) })
             addView(metricRow(
                 "Quick checks",
                 recap.metrics.microChecks.toString(),
@@ -1167,18 +1155,17 @@ class MainActivity : android.app.Activity() {
                 formatDuration(recap.metrics.marathonSeconds),
                 "Fast-scroll time",
                 formatDuration(recap.metrics.agitationSeconds)
-            ).apply { setPadding(0, dp(10), 0, 0) })
+            ).apply { setPadding(0, dp(14), 0, 0) })
         }
         content.addView(habitCard)
         focusCards += habitCard
 
         val nextStepCard = card {
-            addView(label("ONE GENTLE THOUGHT FOR TODAY", CORAL_DARK, 12f))
-            addView(TextView(this@MainActivity).apply {
-                text = recapSuggestion(recap)
+            addView(Ui.cardHeader(this@MainActivity, R.drawable.ic_lightbulb, Ui.VIOLET, Ui.VIOLET_SOFT,
+                "One gentle thought for today"))
+            addView(Ui.text(this@MainActivity, recapSuggestion(recap), Ui.Type.BODY, Ui.INK).apply {
                 textSize = 16f
-                setTextColor(INK)
-                setPadding(0, dp(8), 0, 0)
+                setPadding(0, dp(14), 0, 0)
             })
         }
         content.addView(nextStepCard)
@@ -1188,17 +1175,12 @@ class MainActivity : android.app.Activity() {
         val continueButton = actionButton("Let’s make today count") {
             stage.pip.playCheer()
             stage.postDelayed(450) { dialog.dismiss() }
-        }.apply {
-            textSize = 16f
-            setTypeface(typeface, Typeface.BOLD)
-            background = roundedBackground(CORAL, dp(16).toFloat())
-            stateListAnimator = null
         }
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(10), dp(20), dp(18))
-            setBackgroundColor(CREAM)
-            addView(continueButton, LinearLayout.LayoutParams(-1, dp(54)))
+            setPadding(dp(20), dp(12), dp(20), dp(18))
+            setBackgroundColor(Ui.BG)
+            addView(continueButton, LinearLayout.LayoutParams(-1, dp(52)))
         }
         root.addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
@@ -1225,9 +1207,12 @@ class MainActivity : android.app.Activity() {
             if (index == currentFocus && !force) return
             currentFocus = index
             focusCards.forEachIndexed { cardIndex, view ->
-                view.background = roundedBackground(
-                    if (cardIndex == index) Color.parseColor("#FFF2CB") else Color.WHITE,
-                    dp(18).toFloat()
+                val focused = cardIndex == index
+                view.background = Ui.rounded(
+                    if (focused) Ui.BRAND_TINT else Ui.SURFACE,
+                    dp(20).toFloat(),
+                    dp(if (focused) 2 else 1),
+                    if (focused) Ui.BRAND else Ui.BORDER
                 )
             }
             stage.bottomInset = footer.height
@@ -1340,33 +1325,18 @@ class MainActivity : android.app.Activity() {
             this,
             repository.defaultFocusMinutes() * 60_000L
         )
-        val view = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(24), dp(24), dp(24), dp(24))
-            background = roundedBackground(CREAM, dp(20).toFloat())
-
-            addView(TextView(this@MainActivity).apply {
-                text = "START FOCUS SESSION"
-                textSize = 12f
-                letterSpacing = 0.14f
-                setTextColor(CORAL_DARK)
-                setTypeface(typeface, Typeface.BOLD)
+        val view = dialogSheet().apply {
+            addView(Ui.iconBadge(this@MainActivity, R.drawable.ic_timer, Ui.BRAND_DEEP, Ui.BRAND_SOFT, 48f))
+            addView(Ui.text(this@MainActivity, "Start focus session", Ui.Type.OVERLINE, Ui.BRAND_DEEP).apply {
                 gravity = Gravity.CENTER
+                setPadding(0, dp(16), 0, 0)
             })
-
-            addView(TextView(this@MainActivity).apply {
-                text = "Choose focus duration"
-                textSize = 20f
-                setTextColor(INK)
-                setTypeface(typeface, Typeface.BOLD)
+            addView(Ui.text(this@MainActivity, "Choose focus duration", Ui.Type.TITLE).apply {
                 gravity = Gravity.CENTER
-                setPadding(0, dp(6), 0, dp(12))
+                setPadding(0, dp(6), 0, dp(14))
             })
-
-            addView(durationPicker)
-
-            addView(actionButton("Start Timer") {
+            addView(durationPicker, LinearLayout.LayoutParams(-1, -2))
+            addView(actionButton("Start Timer", icon = R.drawable.ic_timer) {
                 dialog?.dismiss()
                 repository.startFocusSession(
                     durationPicker.durationMillis,
@@ -1374,7 +1344,7 @@ class MainActivity : android.app.Activity() {
                 )
                 showFocusScreen(checkNotNull(repository.activeFocusSession()))
             }, LinearLayout.LayoutParams(-1, -2).apply {
-                topMargin = dp(16)
+                topMargin = dp(18)
             })
         }
 
@@ -1383,6 +1353,14 @@ class MainActivity : android.app.Activity() {
             .create()
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         dialog.show()
+    }
+
+    /** White rounded sheet used as the body of the app's own dialogs. */
+    private fun dialogSheet(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(dp(24), dp(28), dp(24), dp(24))
+        background = Ui.rounded(Ui.SURFACE, dp(28).toFloat())
     }
 
     private fun showFocusHeartPopup() {
@@ -1402,50 +1380,43 @@ class MainActivity : android.app.Activity() {
         val selectedMessage = messages[(completedMin % messages.size).toInt()]
 
         var dialog: Dialog? = null
-        val dialogView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(24), dp(24), dp(24), dp(24))
-            background = roundedBackground(CREAM, dp(20).toFloat())
-
+        val dialogView = dialogSheet().apply {
             val popupHeart = FocusHeartView(this@MainActivity).apply {
                 fillFraction = fraction
                 showBubbles = false
             }
-            addView(popupHeart, LinearLayout.LayoutParams(dp(80), dp(80)).apply {
-                bottomMargin = dp(16)
-            })
-
-            addView(TextView(this@MainActivity).apply {
-                text = "YOUR MINDFUL HEART"
-                textSize = 12f
-                letterSpacing = 0.14f
-                setTextColor(CORAL_DARK)
-                setTypeface(typeface, Typeface.BOLD)
+            addView(popupHeart, LinearLayout.LayoutParams(dp(96), dp(96)))
+            addView(Ui.text(this@MainActivity, "Your mindful heart", Ui.Type.OVERLINE, Ui.SUCCESS).apply {
                 gravity = Gravity.CENTER
+                setPadding(0, dp(14), 0, 0)
             })
-
-            addView(TextView(this@MainActivity).apply {
-                text = selectedMessage
-                textSize = 16f
-                setTextColor(INK)
-                setTypeface(typeface, Typeface.BOLD)
+            addView(Ui.text(this@MainActivity, selectedMessage, Ui.Type.SUBTITLE).apply {
                 gravity = Gravity.CENTER
-                setPadding(0, dp(10), 0, dp(12))
+                setLineSpacing(0f, 1.25f)
+                setPadding(0, dp(8), 0, dp(18))
             })
-
-            addView(TextView(this@MainActivity).apply {
-                text = "Today's Focus: ${completedMin}m / ${targetMin}m ($percent% filled)"
-                textSize = 13f
-                setTextColor(MUTED)
-                gravity = Gravity.CENTER
-                setPadding(0, 0, 0, dp(20))
-            })
-
-            addView(actionButton("Start Focus Session") {
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(14), dp(16), dp(16))
+                background = Ui.rounded(Ui.SURFACE_MUTED, dp(16).toFloat())
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(Ui.text(this@MainActivity, "Today's focus", Ui.Type.LABEL), LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(Ui.text(this@MainActivity, "${completedMin}m / ${targetMin}m", Ui.Type.LABEL, Ui.INK).apply {
+                        fontFeatureSettings = "tnum"
+                    })
+                })
+                addView(Ui.ProgressBar(this@MainActivity, fraction, Ui.SUCCESS, Ui.BORDER),
+                    LinearLayout.LayoutParams(-1, dp(8)).apply { topMargin = dp(10) })
+                addView(Ui.text(this@MainActivity, "$percent% filled", Ui.Type.CAPTION).apply {
+                    setPadding(0, dp(8), 0, 0)
+                })
+                contentDescription = "Today's Focus: ${completedMin}m / ${targetMin}m ($percent% filled)"
+            }, LinearLayout.LayoutParams(-1, -2))
+            addView(actionButton("Start Focus Session", icon = R.drawable.ic_timer) {
                 dialog?.dismiss()
                 showFocusDurationPickerDialog()
-            }, LinearLayout.LayoutParams(-1, -2))
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
         }
 
         dialog = AlertDialog.Builder(this)
@@ -1460,54 +1431,40 @@ class MainActivity : android.app.Activity() {
         pipCompanion?.onPause()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(24), dp(20), dp(24), dp(20))
-            setBackgroundColor(CREAM)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            setBackgroundColor(Ui.BG)
         }
-        root.addView(TextView(this).apply {
-            text = brandTitleText()
-            textSize = 12f
-            letterSpacing = .18f
-            setTextColor(CORAL_DARK)
-            gravity = Gravity.CENTER
-        })
+        root.addView(Ui.chip(this, "Focus session", Ui.BRAND_DEEP, Ui.BRAND_SOFT, R.drawable.ic_timer),
+            LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(12) })
 
+        root.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
         heroHeartView = FocusHeartView(this).apply {
             fillFraction = focusSession.progressFraction
             showBubbles = true
         }
-        root.addView(heroHeartView, LinearLayout.LayoutParams(dp(160), dp(160)).apply {
-            topMargin = dp(16)
-            bottomMargin = dp(12)
+        root.addView(heroHeartView, LinearLayout.LayoutParams(dp(176), dp(176)).apply {
+            bottomMargin = dp(20)
         })
 
-        root.addView(TextView(this).apply {
-            text = "Your focus time"
-            textSize = 22f
-            setTextColor(INK)
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-        })
-
-        root.addView(TextView(this).apply {
-            text = if (focusSession.isPaused) {
+        root.addView(Ui.text(this, "Your focus time", Ui.Type.TITLE).apply { gravity = Gravity.CENTER })
+        root.addView(Ui.text(
+            this,
+            if (focusSession.isPaused) {
                 "Focus paused during your short scroll break."
             } else {
                 "One calm, intentional stretch. You’ve got this."
-            }
-            textSize = 13f
-            setTextColor(MUTED)
+            },
+            Ui.Type.SMALL
+        ).apply {
             gravity = Gravity.CENTER
-            setPadding(0, dp(2), 0, dp(2))
+            setPadding(0, dp(6), 0, 0)
         }.also { focusStatusView = it })
 
-        focusTimerView = TextView(this).apply {
-            text = formatFocusCountdown(focusSession)
-            textSize = 32f
-            setTextColor(CORAL_DARK)
-            setTypeface(typeface, Typeface.BOLD)
+        focusTimerView = Ui.text(this, formatFocusCountdown(focusSession), Ui.Type.DISPLAY, Ui.INK).apply {
+            textSize = 56f
             gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(2))
+            setPadding(0, dp(14), 0, dp(4))
         }
         root.addView(focusTimerView)
 
@@ -1538,58 +1495,46 @@ class MainActivity : android.app.Activity() {
 //        })
 
         scrollBreakContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(10), dp(16), dp(10))
-            background = roundedBackground(Color.parseColor("#FFF3F0"), dp(16).toFloat())
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = Ui.rounded(Ui.WARNING_SOFT, dp(18).toFloat())
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-                bottomMargin = dp(12)
+                topMargin = dp(16)
             }
             visibility = if (focusSession.isPaused && focusSession.reminderAtMillis > 0L) View.VISIBLE else View.GONE
 
-            addView(TextView(this@MainActivity).apply {
-                text = "☕ SCROLL BREAK ACTIVE"
-                textSize = 11f
-                letterSpacing = 0.12f
-                setTextColor(CORAL_DARK)
-                setTypeface(typeface, Typeface.BOLD)
-                gravity = Gravity.CENTER
-            })
-            scrollBreakTimerView = TextView(this@MainActivity).apply {
-                text = formatBreakCountdown(focusSession.reminderAtMillis)
-                textSize = 20f
-                setTextColor(INK)
-                setTypeface(typeface, Typeface.BOLD)
-                gravity = Gravity.CENTER
-                setPadding(0, dp(2), 0, dp(2))
-            }
-            addView(scrollBreakTimerView)
-            addView(TextView(this@MainActivity).apply {
-                text = "Enjoy your break! Focus will automatically resume when timer reaches 00:00."
-                textSize = 11f
-                setTextColor(MUTED)
-                gravity = Gravity.CENTER
-            })
+            addView(Ui.iconBadge(this@MainActivity, R.drawable.ic_coffee, Ui.WARNING, Ui.SURFACE, 40f),
+                LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(14) })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(Ui.text(this@MainActivity, "Scroll break active", Ui.Type.OVERLINE, Ui.WARNING))
+                scrollBreakTimerView = Ui.text(
+                    this@MainActivity, formatBreakCountdown(focusSession.reminderAtMillis), Ui.Type.SUBTITLE
+                ).apply {
+                    fontFeatureSettings = "tnum"
+                    setPadding(0, dp(4), 0, dp(4))
+                }
+                addView(scrollBreakTimerView)
+                addView(Ui.text(
+                    this@MainActivity,
+                    "Enjoy your break! Focus will automatically resume when timer reaches 00:00.",
+                    Ui.Type.CAPTION, Ui.INK_2
+                ))
+            }, LinearLayout.LayoutParams(0, -2, 1f))
         }
         root.addView(scrollBreakContainer)
 
+        root.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
         root.addView(card {
-            addView(label("A NOTE TO CARRY WITH YOU", CORAL_DARK, 11f))
-            addView(TextView(this@MainActivity).apply {
-                text = "“${focusSession.quote}”"
-                textSize = 16f
-                setTextColor(INK)
-                setTypeface(typeface, Typeface.BOLD)
-                setPadding(0, dp(6), 0, dp(2))
+            addView(Ui.text(this@MainActivity, "A note to carry with you", Ui.Type.OVERLINE).apply {
+                setPadding(0, 0, 0, dp(10))
             })
+            addView(Ui.quote(this@MainActivity, focusSession.quote))
         })
 
-        root.addView(actionButton("End focus early") { leaveFocusMode() }.apply {
-            setTextColor(CORAL_DARK)
-            background = roundedBackground(Color.WHITE, dp(12).toFloat())
-        }, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(16)
-        })
+        root.addView(actionButton("End focus early", Ui.ButtonStyle.OUTLINE) { leaveFocusMode() },
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
 
         setContentView(root)
         if (activityResumed) {
@@ -1640,6 +1585,13 @@ class MainActivity : android.app.Activity() {
         val tab = selectedTab
         pageHeading.text = tab.heading
         pageSubtitle.text = tab.subtitle
+        // Charts take the tab's accent; the page itself stays on one calm background.
+        selectedAccent = when (tab) {
+            DashboardTab.OVERVIEW -> Ui.BRAND
+            DashboardTab.TIME -> Ui.TEAL
+            DashboardTab.SCROLLS -> Ui.VIOLET
+            DashboardTab.PROGRESS -> Ui.SUCCESS
+        }
         pageContent.removeAllViews()
         when (tab) {
             DashboardTab.OVERVIEW -> buildOverview()
@@ -1647,18 +1599,6 @@ class MainActivity : android.app.Activity() {
             DashboardTab.SCROLLS -> buildScrollsTab()
             DashboardTab.PROGRESS -> buildProgressTab()
         }
-        selectedAccent = when (tab) {
-            DashboardTab.OVERVIEW -> CORAL
-            DashboardTab.TIME -> TEAL
-            DashboardTab.SCROLLS -> PURPLE
-            DashboardTab.PROGRESS -> GREEN
-        }
-        dashboardRoot.setBackgroundColor(when (tab) {
-            DashboardTab.OVERVIEW -> CREAM
-            DashboardTab.TIME -> Color.parseColor("#F0FAF8")
-            DashboardTab.SCROLLS -> Color.parseColor("#F6F3FC")
-            DashboardTab.PROGRESS -> Color.parseColor("#F1F8F2")
-        })
         pageScroll.scrollTo(0, 0)
         updateNavigation()
         animatePageIn()
@@ -1683,204 +1623,246 @@ class MainActivity : android.app.Activity() {
         val mutedUntilMillis = repository.breakRemindersMutedUntilMillis()
         if (mutedUntilMillis > 0L) {
             val remainingMinutes = ((mutedUntilMillis - System.currentTimeMillis() + 59_999L) / 60_000L)
-            pageContent.addView(card {
-                addView(LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    addView(TextView(this@MainActivity).apply {
-                        text = "🔇"
-                        textSize = 20f
-                        contentDescription = "Muted"
-                    }, LinearLayout.LayoutParams(dp(34), -2))
-                    addView(label("BREAK REMINDERS MUTED", CORAL_DARK, 12f),
-                        LinearLayout.LayoutParams(0, -2, 1f))
-                })
-                addView(label(
-                    "Reminders are paused for ${formatDuration(remainingMinutes * 60L)}. Unmute any time to receive them again.",
-                    MUTED,
-                    14f
-                ).apply { setPadding(0, dp(8), 0, dp(12)) })
-                addView(actionButton("Unmute reminders") {
-                    repository.unmuteBreakReminders()
-                    refresh()
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Break reminders are unmuted",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                })
+            pageContent.addView(Ui.banner(
+                this,
+                R.drawable.ic_notifications_off,
+                "Paused for ${formatDuration(remainingMinutes * 60L)}. Unmute any time to receive them again.",
+                Ui.WARNING,
+                Ui.WARNING_SOFT,
+                title = "Break reminders are muted"
+            ).apply {
+                contentDescription = "Break reminders muted"
+                (getChildAt(1) as LinearLayout).addView(
+                    actionButton("Unmute reminders", Ui.ButtonStyle.OUTLINE) {
+                        repository.unmuteBreakReminders()
+                        refresh()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Break reminders are unmuted",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }.apply { minimumHeight = dp(40) },
+                    LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(12) }
+                )
             })
         }
 
         pageContent.addView(card {
+            tag = TOUR_GOALS
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                addView(
-                    label("TODAY'S GOALS", if (onTrack) GREEN else CORAL_DARK, 12f),
-                    LinearLayout.LayoutParams(0, -2, 1f)
-                )
-                addView(LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    gravity = Gravity.END
-                    addView(label("YOUR BEST STREAK", MUTED, 10f).apply {
-                        gravity = Gravity.END
-                    })
-                    addView(TextView(this@MainActivity).apply {
-                        text = "🔥 $bestStreak ${if (bestStreak == 1) "day" else "days"}"
-                        textSize = 14f
-                        setTextColor(INK)
-                        setTypeface(typeface, Typeface.BOLD)
-                        gravity = Gravity.END
-                        contentDescription =
-                            "Your all-time best streak: $bestStreak ${if (bestStreak == 1) "day" else "days"}"
-                    })
+                addView(Ui.chip(
+                    this@MainActivity,
+                    if (onTrack) "On track today" else "Limit crossed",
+                    if (onTrack) Ui.SUCCESS else Ui.BRAND_DEEP,
+                    if (onTrack) Ui.SUCCESS_SOFT else Ui.BRAND_SOFT,
+                    if (onTrack) R.drawable.ic_check_circle else R.drawable.ic_info
+                ))
+                addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
+                addView(Ui.chip(
+                    this@MainActivity,
+                    "Best $bestStreak ${if (bestStreak == 1) "day" else "days"}",
+                    Ui.WARNING,
+                    Ui.WARNING_SOFT,
+                    R.drawable.ic_flame
+                ).apply {
+                    contentDescription =
+                        "Your all-time best streak: $bestStreak ${if (bestStreak == 1) "day" else "days"}"
                 })
             })
-            addView(GoalFlameView(this@MainActivity, onTrack), LinearLayout.LayoutParams(-1, dp(148)))
-            addView(metric(if (onTrack) "Your flame is burning" else "A limit was crossed", 22f))
-            addView(label(
+            addView(GoalFlameView(this@MainActivity, onTrack), LinearLayout.LayoutParams(-1, dp(140)))
+            addView(Ui.text(
+                this@MainActivity,
+                if (onTrack) "Your flame is burning" else "A limit was crossed",
+                Ui.Type.TITLE
+            ).apply { gravity = Gravity.CENTER })
+            addView(Ui.text(
+                this@MainActivity,
                 if (onTrack) "Both goals are still within reach." else
                     "The flame is resting. One tough day doesn’t undo your progress.",
-                MUTED,
-                14f
-            ).apply { setPadding(0, dp(2), 0, dp(8)) })
+                Ui.Type.SMALL
+            ).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(8), dp(6), dp(8), dp(18))
+            })
+            addView(Ui.divider(this@MainActivity))
             addView(metricRow(
-                "Streak",
+                "Current streak",
                 "$streak ${if (streak == 1) "day" else "days"}",
                 "Mindful score",
                 "${score.toInt()} / 100"
-            ))
-            addView(TextView(this@MainActivity).apply {
-                val quote = if (onTrack) {
-                    dailyMotivationalQuote()
-                } else {
-                    "A hard day does not erase your progress. Pause, be kind to yourself, and begin again."
-                }
-                text = "Pip: “$quote”"
-                textSize = 15f
-                setTextColor(INK)
-                setPadding(0, dp(14), 0, dp(2))
-            })
-            addView(label(
+            ).apply { setPadding(0, dp(16), 0, dp(18)) })
+            val quote = if (onTrack) {
+                dailyMotivationalQuote()
+            } else {
+                "A hard day does not erase your progress. Pause, be kind to yourself, and begin again."
+            }
+            addView(Ui.quote(this@MainActivity, quote, "Pip"))
+            addView(Ui.text(
+                this@MainActivity,
                 "A tracked day adds to your streak at its end when both goals are met.",
-                MUTED,
-                12f
-            ).apply { setPadding(0, dp(8), 0, 0) })
+                Ui.Type.CAPTION
+            ).apply { setPadding(0, dp(16), 0, 0) })
         })
 
         pageContent.addView(card {
-            addView(label("YOUR DAILY LIMITS", CORAL_DARK, 12f))
-            addView(metricRow(
-                "Scrolls",
-                "$scrolls / $scrollTarget",
-                "App time",
-                "${formatDuration(activeSeconds)} / ${formatDuration(timeTargetMinutes * 60L)}"
+            tag = TOUR_LIMITS
+            addView(Ui.cardHeader(
+                this@MainActivity, R.drawable.ic_flag, Ui.BRAND_DEEP, Ui.BRAND_SOFT,
+                "Daily limits", "Resets at midnight"
             ))
+            addView(limitRow(
+                "Scrolls", "$scrolls", "of $scrollTarget",
+                scrolls.toFloat() / scrollTarget.coerceAtLeast(1)
+            ), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+            addView(limitRow(
+                "App time", formatDuration(activeSeconds), "of ${formatDuration(timeTargetMinutes * 60L)}",
+                activeSeconds.toFloat() / (timeTargetMinutes * 60L).coerceAtLeast(1L)
+            ), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
         })
 
         pageContent.addView(card {
-            addView(label("TODAY'S SUMMARY", CORAL_DARK, 12f))
-            addView(metric("You're showing up for yourself.", 22f))
-            addView(TextView(this@MainActivity).apply {
-                text = encouragement(snapshot.dailyHistory)
-                textSize = 15f
-                setTextColor(INK)
-                setPadding(0, dp(12), 0, 0)
+            addView(Ui.cardHeader(
+                this@MainActivity, R.drawable.ic_sparkle, Ui.VIOLET, Ui.VIOLET_SOFT,
+                "Today’s summary", "You’re showing up for yourself."
+            ))
+            addView(Ui.text(this@MainActivity, encouragement(snapshot.dailyHistory), Ui.Type.BODY).apply {
+                setPadding(0, dp(14), 0, 0)
             })
         })
 
-        pageContent.addView(sectionTitle("A quick look"))
-        val checkIn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        checkIn.addView(
-            metricRow(
-                "App foreground",
-                formatDuration(today?.activeSeconds ?: 0),
-                "Scrolls",
-                (today?.scrollCount ?: 0).toString()
-            )
-        )
-        checkIn.addView(
-            metricRow(
-                "Habit score",
-                snapshot.dailyHistory.lastOrNull()?.htiScore?.let { "${it.toInt()} / 100" } ?: "—",
-                "Sessions",
-                (today?.visits ?: snapshot.visits).toString()
-            ),
-            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
-        )
-        pageContent.addView(checkIn)
+        pageContent.addView(sectionTitle("At a glance"))
+        pageContent.addView(Ui.grid(this, listOf(
+            Ui.tile(this, R.drawable.ic_schedule, Ui.TEAL, Ui.TEAL_SOFT,
+                "App time", formatDuration(today?.activeSeconds ?: 0)),
+            Ui.tile(this, R.drawable.ic_swap_vert, Ui.VIOLET, Ui.VIOLET_SOFT,
+                "Scrolls", (today?.scrollCount ?: 0).toString()),
+            Ui.tile(this, R.drawable.ic_sparkle, Ui.SUCCESS, Ui.SUCCESS_SOFT,
+                "Habit score", snapshot.dailyHistory.lastOrNull()?.htiScore?.let { "${it.toInt()} / 100" } ?: "—"),
+            Ui.tile(this, R.drawable.ic_history, Ui.BRAND_DEEP, Ui.BRAND_SOFT,
+                "Sessions", (today?.visits ?: snapshot.visits).toString())
+        )))
 
         pageContent.addView(sectionTitle("Tracking"))
         val trackingOn = isAccessibilityEnabled()
         pageContent.addView(card {
-            addView(label(
+            addView(Ui.cardHeader(
+                this@MainActivity,
+                R.drawable.ic_shield,
+                if (trackingOn) Ui.SUCCESS else Ui.BRAND_DEEP,
+                if (trackingOn) Ui.SUCCESS_SOFT else Ui.BRAND_SOFT,
                 if (trackingOn) "Tracking is on" else "Tracking is off",
-                if (trackingOn) GREEN else CORAL_DARK,
-                16f
+                trailing = Ui.chip(
+                    this@MainActivity,
+                    if (trackingOn) "Active" else "Off",
+                    if (trackingOn) Ui.SUCCESS else Ui.BRAND_DEEP,
+                    if (trackingOn) Ui.SUCCESS_SOFT else Ui.BRAND_SOFT
+                )
             ))
-            addView(TextView(this@MainActivity).apply {
-                text = "Your activity is saved only on this device. You can pause tracking any time in Accessibility settings."
-                textSize = 14f
-                setTextColor(MUTED)
-                setPadding(0, dp(8), 0, dp(14))
-            })
-            addView(actionButton(if (trackingOn) "Open tracking settings" else "Set up tracking") {
+            addView(Ui.text(
+                this@MainActivity,
+                "Your activity is saved only on this device. You can pause tracking any time in Accessibility settings.",
+                Ui.Type.SMALL
+            ).apply { setPadding(0, dp(14), 0, dp(16)) })
+            addView(actionButton(
+                if (trackingOn) "Open tracking settings" else "Set up tracking",
+                if (trackingOn) Ui.ButtonStyle.OUTLINE else Ui.ButtonStyle.PRIMARY
+            ) {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             })
         })
     }
 
+    /** "Scrolls  116 of 100" over a progress bar that warms up as the limit gets close. */
+    private fun limitRow(name: String, value: String, ofTarget: String, fraction: Float): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.BOTTOM
+                addView(Ui.text(this@MainActivity, name, Ui.Type.LABEL), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(Ui.text(this@MainActivity, value, Ui.Type.SUBTITLE).apply { fontFeatureSettings = "tnum" })
+                addView(Ui.text(this@MainActivity, " $ofTarget", Ui.Type.CAPTION))
+            })
+            val color = when {
+                fraction >= 1f -> Ui.BRAND
+                fraction >= .8f -> Ui.WARNING
+                else -> Ui.SUCCESS
+            }
+            addView(Ui.ProgressBar(this@MainActivity, fraction, color),
+                LinearLayout.LayoutParams(-1, dp(8)).apply { topMargin = dp(10) })
+        }
+
     private fun buildTimeTab() {
         val history = snapshot.dailyHistory
         val today = history.lastOrNull()
-        pageContent.addView(card {
-            addView(label("TODAY", CORAL_DARK, 12f))
-            addView(metric(formatDuration(today?.activeSeconds ?: 0), 32f))
-            addView(label("while supported apps are in the foreground", MUTED, 14f))
-        })
-        pageContent.addView(sectionTitle("Daily app foreground time · last 15 days"))
-        pageContent.addView(chartCard(
-            points = history.map {
-                ChartPoint(chartDate(it.date), it.activeSeconds.toFloat(), detailDate(it.date))
-            },
-            style = ChartStyle.BARS,
-            valueFormatter = ::formatChartDuration
-        ))
         val activeDays = history.filter { it.activeSeconds > 0 }
         val average = if (activeDays.isNotEmpty()) {
             activeDays.map { it.activeSeconds }.average().toLong()
         } else {
             0L
         }
-        pageContent.addView(card {
-            addView(label("A gentle perspective", CORAL_DARK, 12f))
-            addView(TextView(this@MainActivity).apply {
-                text = if (activeDays.isEmpty()) {
-                    "As you use supported apps, this chart will start to reveal your own pattern."
-                } else {
-                    "On days with supported app activity, your average foreground time is ${formatDuration(average)}. Use this as information, not a judgment."
-                }
-                textSize = 15f
-                setTextColor(INK)
-                setPadding(0, dp(8), 0, 0)
-            })
+        pageContent.addView(heroCard(
+            R.drawable.ic_schedule, Ui.TEAL, Ui.TEAL_SOFT, "Today",
+            formatDuration(today?.activeSeconds ?: 0),
+            "while supported apps are in the foreground"
+        ))
+        pageContent.addView(sectionTitle("Last 15 days", "Daily app foreground time"))
+        pageContent.addView(chartCard(
+            points = history.map {
+                ChartPoint(chartDate(it.date), it.activeSeconds.toFloat(), detailDate(it.date))
+            },
+            style = ChartStyle.BARS,
+            valueFormatter = ::formatChartDuration
+        ).apply { tag = TOUR_TIME_CHART })
+        pageContent.addView(Ui.banner(
+            this,
+            R.drawable.ic_lightbulb,
+            if (activeDays.isEmpty()) {
+                "As you use supported apps, this chart will start to reveal your own pattern."
+            } else {
+                "On days with supported app activity, your average foreground time is ${formatDuration(average)}. Use this as information, not a judgment."
+            },
+            Ui.TEAL,
+            Ui.TEAL_SOFT,
+            title = "A gentle perspective"
+        ))
+    }
+
+    /** Large "today" figure with an icon, used at the top of the Time and Scrolls tabs. */
+    private fun heroCard(icon: Int, tint: Int, soft: Int, overline: String, value: String, caption: String,
+                         extra: View? = null): LinearLayout = card {
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(Ui.iconBadge(this@MainActivity, icon, tint, soft, 32f))
+            addView(Ui.text(this@MainActivity, overline, Ui.Type.OVERLINE),
+                LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
         })
+        addView(Ui.text(this@MainActivity, value, Ui.Type.DISPLAY).apply { setPadding(0, dp(16), 0, 0) })
+        addView(Ui.text(this@MainActivity, caption, Ui.Type.SMALL).apply { setPadding(0, dp(6), 0, 0) })
+        if (extra != null) addView(extra, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14) })
     }
 
     private fun buildScrollsTab() {
         val history = snapshot.dailyHistory
         val today = history.lastOrNull()
+        pageContent.addView(heroCard(
+            R.drawable.ic_swap_vert, Ui.VIOLET, Ui.VIOLET_SOFT, "Today’s scrolls",
+            (today?.scrollCount ?: 0).toString(),
+            "vertical scrolls across your tracked apps",
+            Ui.chip(
+                this, "Estimated thumb travel: ${String.format(Locale.US, "%.3f km", snapshot.distanceKm)}",
+                Ui.VIOLET, Ui.VIOLET_SOFT, R.drawable.ic_ruler
+            )
+        ).apply { tag = TOUR_SCROLLS_TODAY })
+        pageContent.addView(sectionTitle("By app today"))
         pageContent.addView(card {
-            addView(label("TODAY'S SCROLLS", CORAL_DARK, 12f))
-            addView(metric((today?.scrollCount ?: 0).toString(), 32f))
-            addView(label("Estimated thumb travel: ${String.format(Locale.US, "%.3f km", snapshot.distanceKm)}", MUTED, 14f))
-        })
-        pageContent.addView(sectionTitle("Scrolls by app today"))
-        pageContent.addView(card {
+            tag = TOUR_SCROLLS_BY_APP
             addView(selectedAppInsights())
         })
-        pageContent.addView(sectionTitle("Daily scrolls · last 15 days"))
+        pageContent.addView(sectionTitle("Last 15 days", "Daily scrolls"))
         pageContent.addView(chartCard(
             points = history.map {
                 ChartPoint(chartDate(it.date), it.scrollCount.toFloat(), detailDate(it.date))
@@ -1888,61 +1870,77 @@ class MainActivity : android.app.Activity() {
             style = ChartStyle.BARS,
             valueFormatter = { String.format(Locale.US, "%.0f", it) }
         ))
-        pageContent.addView(sectionTitle("Recent supported app sessions"))
+        pageContent.addView(sectionTitle("Recent sessions", "Your latest visits to supported apps"))
         pageContent.addView(activityFeedCard(snapshot.activities))
     }
 
     private fun buildProgressTab() {
         val history = snapshot.dailyHistory
         pageContent.addView(sectionTitle("Apps to track"))
-        pageContent.addView(selectedAppsSettingsCard())
+        pageContent.addView(selectedAppsSettingsCard().apply { tag = TOUR_APPS })
         pageContent.addView(sectionTitle("Daily goals"))
-        pageContent.addView(dailyGoalSettingsCard())
+        pageContent.addView(dailyGoalSettingsCard().apply { tag = TOUR_GOAL_SETTINGS })
         pageContent.addView(sectionTitle("Timers & focus"))
-        pageContent.addView(timerSettingsCard())
+        pageContent.addView(timerSettingsCard().apply { tag = TOUR_REMINDER })
         pageContent.addView(card {
-            addView(label("A FOCUSED PAUSE", CORAL_DARK, 12f))
-            addView(TextView(this@MainActivity).apply {
-                text = "Choose a focus duration, then step away from the feed and give your attention to one thing that matters."
-                textSize = 15f
-                setTextColor(INK)
-                setPadding(0, dp(8), 0, dp(4))
-            })
+            tag = TOUR_FOCUS
+            addView(Ui.cardHeader(
+                this@MainActivity, R.drawable.ic_timer, Ui.BRAND_DEEP, Ui.BRAND_SOFT,
+                "A focused pause", "Step away from the feed for a while"
+            ))
+            addView(Ui.text(
+                this@MainActivity,
+                "Choose a focus duration, then step away from the feed and give your attention to one thing that matters.",
+                Ui.Type.SMALL
+            ).apply { setPadding(0, dp(14), 0, dp(6)) })
             val durationPicker = FocusDurationPicker(
                 this@MainActivity,
                 repository.defaultFocusMinutes() * 60_000L
             )
             addView(durationPicker)
-            addView(actionButton("Start focus") {
+            addView(actionButton("Start focus", icon = R.drawable.ic_timer) {
                 repository.startFocusSession(
                     durationPicker.durationMillis,
                     FocusSessionQuotes.random()
                 )
                 showFocusScreen(checkNotNull(repository.activeFocusSession()))
-            })
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
         })
+        pageContent.addView(sectionTitle("Mindful score"))
         pageContent.addView(card {
-            addView(label("TODAY'S HABIT TAPER INDEX (MINDFUL SCORE)", CORAL_DARK, 12f))
+            tag = TOUR_SCORE
+            addView(Ui.cardHeader(
+                this@MainActivity, R.drawable.ic_sparkle, Ui.SUCCESS, Ui.SUCCESS_SOFT,
+                "Today’s Habit Taper Index", "Your mindful score, from 0 to 100"
+            ))
             val currentScoreFloat = history.lastOrNull()?.htiScore
-            val scoreText = currentScoreFloat?.let { "${it.toInt()} / 100" } ?: "— / 100"
-            addView(metric(scoreText, 34f))
-            currentScoreFloat?.let { valScore ->
-                val ratingLabel = when {
-                    valScore >= 80 -> "🌟 Great balance & intentional scrolling"
-                    valScore >= 55 -> "🌱 Steady control with a few long checks"
-                    else -> "💡 Heavy feed loops today—a fresh start awaits"
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.BOTTOM
+                setPadding(0, dp(18), 0, 0)
+                addView(Ui.text(this@MainActivity, currentScoreFloat?.toInt()?.toString() ?: "No score yet", Ui.Type.DISPLAY).apply {
+                    textSize = if (currentScoreFloat != null) 44f else 24f
+                })
+                if (currentScoreFloat != null) {
+                    addView(Ui.text(this@MainActivity, " / 100", Ui.Type.SUBTITLE, Ui.INK_3).apply {
+                        setPadding(0, 0, 0, dp(5))
+                    })
                 }
-                addView(label(ratingLabel, INK, 14f).apply { setPadding(0, dp(2), 0, dp(6)) })
+            })
+            currentScoreFloat?.let { valScore ->
+                val (ratingLabel, fg, bg) = when {
+                    valScore >= 80 -> Triple("Great balance & intentional scrolling", Ui.SUCCESS, Ui.SUCCESS_SOFT)
+                    valScore >= 55 -> Triple("Steady control with a few long checks", Ui.WARNING, Ui.WARNING_SOFT)
+                    else -> Triple("Heavy feed loops today—a fresh start awaits", Ui.BRAND_DEEP, Ui.BRAND_SOFT)
+                }
+                addView(Ui.chip(this@MainActivity, ratingLabel, fg, bg),
+                    LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
             }
-            addView(TextView(this@MainActivity).apply {
-                text = progressContext(history)
-                textSize = 14f
-                setTextColor(MUTED)
-                setLineSpacing(dp(2).toFloat(), 1f)
-                setPadding(0, dp(6), 0, 0)
+            addView(Ui.text(this@MainActivity, progressContext(history), Ui.Type.SMALL).apply {
+                setPadding(0, dp(14), 0, 0)
             })
         })
-        pageContent.addView(sectionTitle("Your score trend · last 15 days"))
+        pageContent.addView(sectionTitle("Score trend", "Last 15 days"))
         pageContent.addView(chartCard(
             points = history.mapNotNull { day ->
                 day.htiScore?.let {
@@ -1954,24 +1952,27 @@ class MainActivity : android.app.Activity() {
             minValue = 0f,
             maxValue = 100f
         ))
-        pageContent.addView(card {
-            addView(label("NOTICE THE SMALL WINS", CORAL_DARK, 12f))
-            addView(TextView(this@MainActivity).apply {
-                text = encouragement(history)
-                textSize = 15f
-                setTextColor(INK)
-                setPadding(0, dp(8), 0, 0)
-            })
+        pageContent.addView(Ui.banner(
+            this, R.drawable.ic_trending_up, encouragement(history), Ui.SUCCESS, Ui.SUCCESS_SOFT,
+            title = "Notice the small wins"
+        ))
+        pageContent.addView(Ui.text(this, brandTitleText(), Ui.Type.CAPTION).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(24), 0, dp(4))
         })
     }
 
     private fun selectedAppsSettingsCard(): View = card {
-        addView(label("TRACK YOUR SELECTED APPS", CORAL_DARK, 12f))
         val selected = repository.selectedPackages().toMutableSet()
+        addView(Ui.cardHeader(
+            this@MainActivity, R.drawable.ic_apps, Ui.VIOLET, Ui.VIOLET_SOFT,
+            "Tracked apps",
+            "${selected.size} ${if (selected.size == 1) "app" else "apps"} count toward your goals"
+        ))
         addView(appSelectionRows(selected, readOnly = true).apply {
-            setPadding(0, dp(8), 0, dp(12))
+            setPadding(0, dp(8), 0, dp(14))
         })
-        addView(actionButton("Choose apps") {
+        addView(actionButton("Choose apps", Ui.ButtonStyle.OUTLINE, R.drawable.ic_edit) {
             val dialogSelection = repository.selectedPackages().toMutableSet()
             val appChoices = appSelectionRows(dialogSelection)
             val scrollView = ScrollView(this@MainActivity).apply {
@@ -2016,26 +2017,29 @@ class MainActivity : android.app.Activity() {
             val row = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(4), dp(5), dp(4), dp(5))
+                setPadding(0, dp(10), 0, dp(10))
                 val icon = ImageView(this@MainActivity).apply {
                     setImageDrawable(app.icon)
                     contentDescription = "${app.label} app icon"
                     scaleType = ImageView.ScaleType.FIT_CENTER
                 }
-                addView(icon, LinearLayout.LayoutParams(dp(40), dp(40)).apply {
-                    marginEnd = dp(12)
+                addView(icon, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                    marginEnd = dp(14)
                 })
                 if (readOnly) {
-                    addView(label(app.label, INK, 15f), LinearLayout.LayoutParams(0, -2, 1f))
-                    addView(label(
-                        "${snapshot.scrollsByPackage[app.packageName] ?: 0} scrolls",
-                        MUTED,
-                        13f
+                    addView(Ui.text(this@MainActivity, app.label, Ui.Type.BODY_STRONG), LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(Ui.text(
+                        this@MainActivity,
+                        "${snapshot.scrollsByPackage[app.packageName] ?: 0} scrolls today",
+                        Ui.Type.CAPTION
                     ))
                 } else {
                     val checkBox = CheckBox(this@MainActivity).apply {
                         text = app.label
                         textSize = 15f
+                        typeface = Ui.font(this@MainActivity, 500)
+                        setTextColor(Ui.INK)
+                        buttonTintList = android.content.res.ColorStateList.valueOf(Ui.BRAND)
                         isChecked = app.packageName in selectedPackages
                         setOnCheckedChangeListener { _, checked ->
                             if (checked) selectedPackages.add(app.packageName)
@@ -2046,16 +2050,16 @@ class MainActivity : android.app.Activity() {
                 }
             }
             addView(row)
-            if (app != installedApps.lastOrNull()) addView(divider())
+            if (app != installedApps.lastOrNull()) addView(Ui.divider(this@MainActivity, 50f))
         }
         if (installedTrackedAppsCache == null) {
-            addView(label("Loading installed apps…", MUTED, 14f))
+            addView(Ui.text(this@MainActivity, "Loading installed apps…", Ui.Type.SMALL))
         } else if (installedApps.isEmpty()) {
-            addView(label(
+            addView(Ui.text(
+                this@MainActivity,
                 if (readOnly) "No selected apps are currently installed." else
                     "No launchable apps were found.",
-                MUTED,
-                14f
+                Ui.Type.SMALL
             ))
         }
     }
@@ -2063,7 +2067,7 @@ class MainActivity : android.app.Activity() {
     private fun selectedAppInsights(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         if (installedTrackedAppsCache == null) {
-            addView(label("Loading app insights…", MUTED, 14f))
+            addView(Ui.text(this@MainActivity, "Loading app insights…", Ui.Type.SMALL))
             return@apply
         }
         val selectedPackages = repository.selectedPackages()
@@ -2071,32 +2075,37 @@ class MainActivity : android.app.Activity() {
         val installedSelectedApps = selectedPackages
             .mapNotNull(installedByPackage::get)
             .sortedBy { it.label.lowercase(Locale.getDefault()) }
+        val most = installedSelectedApps.maxOfOrNull { snapshot.scrollsByPackage[it.packageName] ?: 0 }
+            ?.coerceAtLeast(1) ?: 1
         installedSelectedApps.forEachIndexed { index, app ->
-                val row = LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    val icon = ImageView(this@MainActivity).apply {
-                        setImageDrawable(app.icon)
-                        contentDescription = "${app.label} app icon"
-                        scaleType = ImageView.ScaleType.FIT_CENTER
-                    }
-                    addView(icon, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
-                        marginEnd = dp(12)
-                    })
+            val count = snapshot.scrollsByPackage[app.packageName] ?: 0
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12), 0, dp(12))
+                addView(ImageView(this@MainActivity).apply {
+                    setImageDrawable(app.icon)
+                    contentDescription = "${app.label} app icon"
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                }, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(14) })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
                     addView(LinearLayout(this@MainActivity).apply {
-                        orientation = LinearLayout.VERTICAL
-                        addView(label(app.label, MUTED, 13f))
-                        addView(metric(
-                            "${snapshot.scrollsByPackage[app.packageName] ?: 0} scrolls",
-                            20f
-                        ))
-                    }, LinearLayout.LayoutParams(0, -2, 1f))
-                }
-                addView(row)
-                if (index < installedSelectedApps.lastIndex) addView(divider())
-            }
+                        orientation = LinearLayout.HORIZONTAL
+                        addView(Ui.text(this@MainActivity, app.label, Ui.Type.BODY_STRONG),
+                            LinearLayout.LayoutParams(0, -2, 1f))
+                        addView(Ui.text(this@MainActivity, "$count scrolls", Ui.Type.LABEL, Ui.INK).apply {
+                            fontFeatureSettings = "tnum"
+                        })
+                    })
+                    addView(Ui.ProgressBar(this@MainActivity, count.toFloat() / most, Ui.VIOLET),
+                        LinearLayout.LayoutParams(-1, dp(6)).apply { topMargin = dp(8) })
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+            })
+            if (index < installedSelectedApps.lastIndex) addView(Ui.divider(this@MainActivity, 50f))
+        }
         if (installedSelectedApps.isEmpty()) {
-            addView(label("No selected app scrolls yet.", MUTED, 14f))
+            addView(Ui.text(this@MainActivity, "No selected app scrolls yet.", Ui.Type.SMALL))
         }
     }
 
@@ -2123,7 +2132,10 @@ class MainActivity : android.app.Activity() {
     }
 
     private fun dailyGoalSettingsCard(): View = card {
-        addView(label("SET YOUR DAILY LIMITS", CORAL_DARK, 12f))
+        addView(Ui.cardHeader(
+            this@MainActivity, R.drawable.ic_flag, Ui.BRAND_DEEP, Ui.BRAND_SOFT,
+            "Daily limits", "Stay under both to grow your streak"
+        ))
         lateinit var goalsDisplay: LinearLayout
         lateinit var goalsEditor: LinearLayout
         goalsDisplay = LinearLayout(this@MainActivity).apply {
@@ -2133,14 +2145,11 @@ class MainActivity : android.app.Activity() {
                 "${repository.dailyScrollTarget()} scrolls",
                 "Time limit",
                 formatDuration(repository.dailyTimeTargetMinutes() * 60L)
-            ))
-            addView(actionButton("Edit goals") {
+            ), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+            addView(actionButton("Edit goals", Ui.ButtonStyle.OUTLINE, R.drawable.ic_edit) {
                 goalsDisplay.visibility = View.GONE
                 goalsEditor.visibility = View.VISIBLE
-            }.apply {
-                setTextColor(CORAL_DARK)
-                background = roundedBackground(Color.parseColor("#FFF1ED"), dp(12).toFloat())
-            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
         }
         goalsEditor = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
@@ -2164,56 +2173,64 @@ class MainActivity : android.app.Activity() {
         }
         val pickers = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                addView(label("Scrolls", MUTED, 13f), LinearLayout.LayoutParams(-1, -2))
-                addView(scrollPicker, LinearLayout.LayoutParams(-1, dp(110)))
-            }, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                addView(label("Minutes", MUTED, 13f), LinearLayout.LayoutParams(-1, -2))
-                addView(timePicker, LinearLayout.LayoutParams(-1, dp(110)))
-            }, LinearLayout.LayoutParams(0, -2, 1f))
+            setPadding(0, dp(12), 0, 0)
+            listOf("Scrolls" to scrollPicker, "Minutes" to timePicker).forEachIndexed { i, (name, picker) ->
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    background = Ui.rounded(Ui.SURFACE_MUTED, dp(16).toFloat())
+                    setPadding(0, dp(10), 0, dp(4))
+                    addView(Ui.text(this@MainActivity, name, Ui.Type.CAPTION).apply { gravity = Gravity.CENTER },
+                        LinearLayout.LayoutParams(-1, -2))
+                    addView(picker, LinearLayout.LayoutParams(-1, dp(110)))
+                }, LinearLayout.LayoutParams(0, -2, 1f).apply { if (i > 0) marginStart = dp(10) })
+            }
         }
         goalsEditor.addView(pickers)
-        addView(label(
+        addView(Ui.text(
+            this@MainActivity,
             "A tracked day counts toward your streak when both totals stay below these limits.",
-            MUTED,
-            13f
-        ).apply { setPadding(0, dp(4), 0, dp(10)) })
+            Ui.Type.CAPTION
+        ).apply { setPadding(0, dp(10), 0, 0) })
         goalsEditor.addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
+            addView(actionButton("Cancel", Ui.ButtonStyle.OUTLINE) {
+                goalsEditor.visibility = View.GONE
+                goalsDisplay.visibility = View.VISIBLE
+            }, LinearLayout.LayoutParams(0, -2, 1f))
             addView(actionButton("Save") {
                 repository.setDailyGoals(scrollPicker.value, timePicker.value)
                 refresh()
                 Toast.makeText(this@MainActivity, "Daily goals saved", Toast.LENGTH_SHORT).show()
-            }, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(actionButton("Cancel") {
-                goalsEditor.visibility = View.GONE
-                goalsDisplay.visibility = View.VISIBLE
-            }.apply {
-                setTextColor(CORAL_DARK)
-                background = roundedBackground(Color.parseColor("#FFF1ED"), dp(12).toFloat())
-            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(8) })
-        })
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(10) })
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
         addView(goalsDisplay)
         addView(goalsEditor)
     }
 
     private fun timerSettingsCard(): View = card {
         var marathonMinutes = repository.marathonMinutes()
-        val marathonLabel = label("Break reminder: $marathonMinutes minutes", INK, 15f)
-        addView(marathonLabel)
+        val valueView = Ui.text(this@MainActivity, "$marathonMinutes min", Ui.Type.SUBTITLE, Ui.BRAND_DEEP).apply {
+            fontFeatureSettings = "tnum"
+        }
+        addView(Ui.cardHeader(
+            this@MainActivity, R.drawable.ic_bell, Ui.WARNING, Ui.WARNING_SOFT,
+            "Break reminder", "Pip checks in after this long in a feed",
+            trailing = valueView
+        ))
         addView(SeekBar(this@MainActivity).apply {
             max = TrackingTimerSettings.MAX_MARATHON_MINUTES -
                 TrackingTimerSettings.MIN_MARATHON_MINUTES
             progress = marathonMinutes - TrackingTimerSettings.MIN_MARATHON_MINUTES
+            progressTintList = android.content.res.ColorStateList.valueOf(Ui.BRAND)
+            thumbTintList = android.content.res.ColorStateList.valueOf(Ui.BRAND)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Ui.BORDER_STRONG)
+            contentDescription = "Break reminder: $marathonMinutes minutes"
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                     marathonMinutes = progress + TrackingTimerSettings.MIN_MARATHON_MINUTES
-                    marathonLabel.text = "Break reminder: $marathonMinutes minutes"
+                    valueView.text = "$marathonMinutes min"
+                    seekBar.contentDescription = "Break reminder: $marathonMinutes minutes"
                 }
 
                 override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
@@ -2223,35 +2240,34 @@ class MainActivity : android.app.Activity() {
                     refresh()
                 }
             })
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(4), dp(16), 0)
+            addView(Ui.text(this@MainActivity, "${TrackingTimerSettings.MIN_MARATHON_MINUTES} min", Ui.Type.CAPTION),
+                LinearLayout.LayoutParams(0, -2, 1f))
+            addView(Ui.text(this@MainActivity, "${TrackingTimerSettings.MAX_MARATHON_MINUTES} min", Ui.Type.CAPTION))
         })
-        addView(label(
-            "${TrackingTimerSettings.MIN_MARATHON_MINUTES}–" +
-                "${TrackingTimerSettings.MAX_MARATHON_MINUTES} minutes in supported apps",
-            MUTED,
-            12f
-        ))
-
     }
 
 
 
     private fun activityFeedCard(activities: List<ScrollActivity>): View = card {
+        setPadding(dp(16), dp(6), dp(16), dp(6))
         if (activities.isEmpty()) {
-            addView(label("Supported-app foreground sessions will show up here.", MUTED, 14f))
+            addView(Ui.text(this@MainActivity, "Supported-app foreground sessions will show up here.", Ui.Type.SMALL).apply {
+                setPadding(dp(4), dp(14), dp(4), dp(14))
+            })
             return@card
         }
         val appsByPackage = installedTrackedApps().associateBy { it.packageName }
-        activities.take(10).forEachIndexed { index, activity ->
+        val shown = activities.take(10)
+        shown.forEachIndexed { index, activity ->
             val appName = appsByPackage[activity.packageName]?.label
                 ?: FeedPlatform.entries.firstOrNull { it.packageName == activity.packageName }?.label
                 ?: activity.packageName
-            val time = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
+            val time = SimpleDateFormat("MMM d · h:mm a", Locale.getDefault())
                 .format(Date(activity.startMillis))
-            val type = when {
-                activity.isMicroCheck -> "Micro-check"
-                activity.isMarathon -> "Long session"
-                else -> "Session"
-            }
             val dwell = if (activity.strokeCount > 0) {
                 activity.durationSeconds.toDouble() / activity.strokeCount
             } else {
@@ -2259,28 +2275,49 @@ class MainActivity : android.app.Activity() {
             }
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                appsByPackage[activity.packageName]?.let { app ->
-                    addView(ImageView(this@MainActivity).apply {
-                        setImageDrawable(app.icon)
-                        contentDescription = "$appName app icon"
-                        scaleType = ImageView.ScaleType.FIT_CENTER
-                    }, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
-                        marginEnd = dp(10)
-                    })
+                setPadding(0, dp(14), 0, dp(14))
+                val iconView = ImageView(this@MainActivity).apply {
+                    appsByPackage[activity.packageName]?.let { setImageDrawable(it.icon) }
+                    contentDescription = "$appName app icon"
+                    scaleType = ImageView.ScaleType.FIT_CENTER
                 }
-                addView(TextView(this@MainActivity).apply {
-                    text = "$time | $appName | ${formatDuration(activity.durationSeconds)}\n" +
-                        "$type · ${activity.strokeCount} scrolls · " +
-                        "${String.format(Locale.US, "%.1f", activity.averageCadenceSpm)} SPM · " +
-                        "${String.format(Locale.US, "%.1f", dwell)}s per scroll" +
-                        if (activity.isRapidReentry) "\nOpened again within five minutes" else ""
-                    textSize = 14f
-                    setTextColor(INK)
-                    setPadding(0, dp(10), 0, dp(10))
+                addView(iconView, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(14) })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        addView(Ui.text(this@MainActivity, appName, Ui.Type.BODY_STRONG),
+                            LinearLayout.LayoutParams(0, -2, 1f))
+                        addView(Ui.text(this@MainActivity, formatDuration(activity.durationSeconds), Ui.Type.SUBTITLE).apply {
+                            fontFeatureSettings = "tnum"
+                        })
+                    })
+                    addView(Ui.text(this@MainActivity, time, Ui.Type.CAPTION).apply { setPadding(0, dp(3), 0, 0) })
+                    addView(Ui.text(
+                        this@MainActivity,
+                        "${activity.strokeCount} scrolls · " +
+                            "${String.format(Locale.US, "%.1f", activity.averageCadenceSpm)} SPM · " +
+                            "${String.format(Locale.US, "%.1f", dwell)}s per scroll",
+                        Ui.Type.SMALL
+                    ).apply { setPadding(0, dp(8), 0, 0) })
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        val (type, fg, bg) = when {
+                            activity.isMicroCheck -> Triple("Micro-check", Ui.VIOLET, Ui.VIOLET_SOFT)
+                            activity.isMarathon -> Triple("Long session", Ui.WARNING, Ui.WARNING_SOFT)
+                            else -> Triple("Session", Ui.INK_2, Ui.SURFACE_MUTED)
+                        }
+                        addView(Ui.chip(this@MainActivity, type, fg, bg))
+                        if (activity.isRapidReentry) {
+                            addView(Ui.chip(this@MainActivity, "Opened again within five minutes",
+                                Ui.BRAND_DEEP, Ui.BRAND_SOFT),
+                                LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(6) })
+                        }
+                    }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
                 }, LinearLayout.LayoutParams(0, -2, 1f))
             })
-            if (index < minOf(activities.size, 10) - 1) addView(divider())
+            if (index < shown.lastIndex) addView(Ui.divider(this@MainActivity, 50f))
         }
     }
 
@@ -2291,7 +2328,8 @@ class MainActivity : android.app.Activity() {
         minValue: Float? = null,
         maxValue: Float? = null
     ): View = card {
-        val insight = label("Tap a chart point to explore a day", MUTED, 12f)
+        setPadding(dp(16), dp(18), dp(16), dp(14))
+        val insight = Ui.text(this@MainActivity, "Tap a chart point to explore a day", Ui.Type.CAPTION)
         addView(HistoryChartView(
             this@MainActivity,
             points,
@@ -2301,10 +2339,18 @@ class MainActivity : android.app.Activity() {
             maxValue,
             onPointSelected = { point ->
                 insight.text = "${point.detailLabel}: ${valueFormatter(point.value)}"
+                insight.setTextColor(Ui.INK_2)
             }
         ),
-            LinearLayout.LayoutParams(-1, dp(225)))
-        addView(insight)
+            LinearLayout.LayoutParams(-1, dp(220)))
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(10), 0, 0)
+            addView(Ui.iconView(this@MainActivity, R.drawable.ic_touch, Ui.INK_3, 14f),
+                LinearLayout.LayoutParams(dp(14), dp(14)).apply { marginEnd = dp(6) })
+            addView(insight)
+        })
     }
 
     private inner class HistoryChartView(
@@ -2317,19 +2363,26 @@ class MainActivity : android.app.Activity() {
         private val onPointSelected: (ChartPoint) -> Unit
     ) : View(context) {
         private val chartPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val gridColor = Color.parseColor("#EEE8E0")
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Ui.BORDER
+            strokeWidth = dp(1).toFloat()
+            style = Paint.Style.STROKE
+            pathEffect = android.graphics.DashPathEffect(floatArrayOf(dp(4).toFloat(), dp(4).toFloat()), 0f)
+        }
         private var selectedIndex: Int? = null
 
         init {
             isClickable = true
             contentDescription = "Interactive chart. Tap a point to hear its value."
+            setLayerType(LAYER_TYPE_SOFTWARE, null)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (points.isEmpty()) return false
             if (event.action == MotionEvent.ACTION_UP) {
-                val left = dp(12).toFloat()
-                val right = width - dp(12).toFloat()
+                val left = dp(4).toFloat()
+                val right = width - dp(4).toFloat()
                 val step = (right - left) / points.size
                 val index = ((event.x - left) / step).toInt().coerceIn(points.indices)
                 selectedIndex = index
@@ -2350,97 +2403,142 @@ class MainActivity : android.app.Activity() {
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            if (points.isEmpty()) return
+            if (points.isEmpty()) {
+                textPaint.color = Ui.INK_3
+                textPaint.textSize = dp(13).toFloat()
+                textPaint.typeface = Ui.font(context, 500)
+                textPaint.textAlign = Paint.Align.CENTER
+                canvas.drawText("No data yet", width / 2f, height / 2f, textPaint)
+                return
+            }
 
-            val left = dp(12).toFloat()
-            val right = width - dp(12).toFloat()
-            val top = dp(18).toFloat()
-            val bottom = height - dp(34).toFloat()
+            val left = dp(4).toFloat()
+            val right = width - dp(4).toFloat()
+            val top = dp(30).toFloat()
+            val bottom = height - dp(26).toFloat()
             val chartHeight = bottom - top
             val values = points.map { it.value }
             val minimum = fixedMin ?: 0f
             val maximum = fixedMax ?: max(1f, values.maxOrNull() ?: 0f)
             val range = max(1f, maximum - minimum)
+            val step = (right - left) / points.size
+            val highlighted = selectedIndex ?: points.lastIndex
+            fun xAt(index: Int) = left + step * (index + .5f)
+            fun yAt(value: Float) = bottom - ((value - minimum).coerceIn(0f, range) / range) * chartHeight
 
-            chartPaint.color = gridColor
-            chartPaint.strokeWidth = dp(1).toFloat()
+            // Gridlines with the top value labelled.
             for (line in 0..3) {
                 val y = top + chartHeight * line / 3f
-                canvas.drawLine(left, y, right, y, chartPaint)
+                canvas.drawLine(left, y, right, y, gridPaint)
             }
+            textPaint.typeface = Ui.font(context, 600)
+            textPaint.color = Ui.INK_3
+            textPaint.textSize = dp(10).toFloat()
+            textPaint.textAlign = Paint.Align.LEFT
+            canvas.drawText(valueFormatter(maximum), left, top - dp(8).toFloat(), textPaint)
 
-            val step = (right - left) / points.size
-            selectedIndex?.let { index ->
-                val x = left + step * (index + .5f)
-                chartPaint.color = Color.argb(35, 23, 32, 42)
-                canvas.drawRoundRect(
-                    RectF(x - step * .42f, top, x + step * .42f, bottom),
-                    dp(8).toFloat(),
-                    dp(8).toFloat(),
-                    chartPaint
-                )
-            }
+            chartPaint.style = Paint.Style.FILL
+            chartPaint.shader = null
             if (style == ChartStyle.BARS) {
+                val barWidth = minOf(dp(16).toFloat(), step * .58f)
                 points.forEachIndexed { index, point ->
-                    val barWidth = minOf(dp(14).toFloat(), step * .56f)
-                    val x = left + step * (index + .5f)
+                    val x = xAt(index)
                     val barHeight = ((point.value - minimum).coerceAtLeast(0f) / range) * chartHeight
-                    chartPaint.color = selectedAccent
+                    if (barHeight < dp(3)) {
+                        chartPaint.color = Ui.SURFACE_MUTED
+                        canvas.drawRoundRect(RectF(x - barWidth / 2, bottom - dp(4), x + barWidth / 2, bottom),
+                            dp(2).toFloat(), dp(2).toFloat(), chartPaint)
+                        return@forEachIndexed
+                    }
+                    chartPaint.color = if (index == highlighted) selectedAccent
+                    else blendColor(selectedAccent, Ui.SURFACE, .62f)
                     canvas.drawRoundRect(
                         RectF(x - barWidth / 2, bottom - barHeight, x + barWidth / 2, bottom),
-                        dp(4).toFloat(),
-                        dp(4).toFloat(),
+                        minOf(barWidth / 2, dp(6).toFloat()),
+                        minOf(barWidth / 2, dp(6).toFloat()),
                         chartPaint
                     )
                 }
             } else {
                 val path = Path()
                 points.forEachIndexed { index, point ->
-                    val x = left + step * (index + .5f)
-                    val y = bottom - ((point.value - minimum).coerceIn(0f, range) / range) * chartHeight
+                    val x = xAt(index)
+                    val y = yAt(point.value)
                     if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
+                val area = Path(path).apply {
+                    lineTo(xAt(points.lastIndex), bottom)
+                    lineTo(xAt(0), bottom)
+                    close()
+                }
+                chartPaint.shader = android.graphics.LinearGradient(
+                    0f, top, 0f, bottom,
+                    Color.argb(60, Color.red(selectedAccent), Color.green(selectedAccent), Color.blue(selectedAccent)),
+                    Color.argb(0, Color.red(selectedAccent), Color.green(selectedAccent), Color.blue(selectedAccent)),
+                    android.graphics.Shader.TileMode.CLAMP
+                )
+                canvas.drawPath(area, chartPaint)
+                chartPaint.shader = null
                 chartPaint.color = selectedAccent
                 chartPaint.style = Paint.Style.STROKE
-                chartPaint.strokeWidth = dp(3).toFloat()
+                chartPaint.strokeWidth = dp(2.5f)
                 chartPaint.strokeCap = Paint.Cap.ROUND
                 chartPaint.strokeJoin = Paint.Join.ROUND
                 canvas.drawPath(path, chartPaint)
                 chartPaint.style = Paint.Style.FILL
-                points.forEachIndexed { index, point ->
-                    val x = left + step * (index + .5f)
-                    val y = bottom - ((point.value - minimum).coerceIn(0f, range) / range) * chartHeight
-                    canvas.drawCircle(x, y, dp(3).toFloat(), chartPaint)
+                val hx = xAt(highlighted)
+                val hy = yAt(points[highlighted].value)
+                chartPaint.color = Ui.SURFACE
+                canvas.drawCircle(hx, hy, dp(6).toFloat(), chartPaint)
+                chartPaint.color = selectedAccent
+                canvas.drawCircle(hx, hy, dp(4).toFloat(), chartPaint)
+            }
+
+            // Day labels; the highlighted one in ink.
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = dp(10).toFloat()
+            points.forEachIndexed { index, point ->
+                if (points.size <= 8 || index % 2 == 0 || index == points.lastIndex || index == highlighted) {
+                    val isHighlighted = index == highlighted
+                    textPaint.color = if (isHighlighted) Ui.INK else Ui.INK_3
+                    textPaint.typeface = Ui.font(context, if (isHighlighted) 700 else 500)
+                    canvas.drawText(point.label, xAt(index), height - dp(6).toFloat(), textPaint)
                 }
             }
 
-            chartPaint.color = MUTED
-            chartPaint.textSize = dp(10).toFloat()
-            chartPaint.textAlign = Paint.Align.CENTER
-            points.forEachIndexed { index, point ->
-                if (points.size <= 8 || index % 2 == 0 || index == points.lastIndex) {
-                    canvas.drawText(point.label, left + step * (index + .5f), height - dp(9).toFloat(), chartPaint)
-                }
-            }
-            chartPaint.textAlign = Paint.Align.RIGHT
-            chartPaint.textSize = dp(9).toFloat()
-            canvas.drawText(valueFormatter(maximum), right, top - dp(5).toFloat(), chartPaint)
+            // Tooltip for a tapped point.
             selectedIndex?.let { index ->
-                chartPaint.textAlign = Paint.Align.CENTER
-                chartPaint.textSize = dp(11).toFloat()
-                chartPaint.typeface = Typeface.DEFAULT_BOLD
-                chartPaint.color = INK
                 val selected = points[index]
-                val y = if (style == ChartStyle.BARS) {
-                    val barHeight = ((selected.value - minimum).coerceAtLeast(0f) / range) * chartHeight
-                    max(top + dp(14), bottom - barHeight - dp(8))
+                val label = valueFormatter(selected.value)
+                textPaint.typeface = Ui.font(context, 700)
+                textPaint.textSize = dp(11).toFloat()
+                val textWidth = textPaint.measureText(label)
+                val pillW = textWidth + dp(16)
+                val pillH = dp(22).toFloat()
+                val anchorY = if (style == ChartStyle.BARS) {
+                    bottom - ((selected.value - minimum).coerceAtLeast(0f) / range) * chartHeight
                 } else {
-                    bottom - ((selected.value - minimum).coerceIn(0f, range) / range) * chartHeight - dp(10)
+                    yAt(selected.value)
                 }
-                canvas.drawText(valueFormatter(selected.value), left + step * (index + .5f), y, chartPaint)
-                chartPaint.typeface = Typeface.DEFAULT
+                val cx = xAt(index).coerceIn(left + pillW / 2, right - pillW / 2)
+                val pillBottom = (anchorY - dp(8)).coerceAtLeast(pillH)
+                chartPaint.color = Ui.INK
+                canvas.drawRoundRect(RectF(cx - pillW / 2, pillBottom - pillH, cx + pillW / 2, pillBottom),
+                    pillH / 2, pillH / 2, chartPaint)
+                textPaint.color = Color.WHITE
+                canvas.drawText(label, cx, pillBottom - pillH / 2 + dp(4), textPaint)
             }
         }
+    }
+
+    /** Mixes [color] toward [base] by [amount] (0 = color, 1 = base). */
+    private fun blendColor(color: Int, base: Int, amount: Float): Int {
+        fun mix(a: Int, b: Int) = (a + (b - a) * amount).toInt()
+        return Color.rgb(
+            mix(Color.red(color), Color.red(base)),
+            mix(Color.green(color), Color.green(base)),
+            mix(Color.blue(color), Color.blue(base))
+        )
     }
 
     /** What Pip needs to know about the app; Pip never touches the repository directly. */
@@ -2726,94 +2824,62 @@ class MainActivity : android.app.Activity() {
         secondValue: String?
     ): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(label(firstLabel, MUTED, 13f))
-            addView(metric(firstValue, 22f))
-        }, LinearLayout.LayoutParams(0, -2, 1f))
+        addView(Ui.stat(this@MainActivity, firstLabel, firstValue, valueType = Ui.Type.TITLE),
+            LinearLayout.LayoutParams(0, -2, 1f))
         if (secondLabel != null && secondValue != null) {
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.END
-                addView(label(secondLabel, MUTED, 13f))
-                addView(metric(secondValue, 22f))
-            })
+            addView(View(this@MainActivity).apply { setBackgroundColor(Ui.BORDER) },
+                LinearLayout.LayoutParams(dp(1), -1).apply { marginStart = dp(12); marginEnd = dp(16) })
+            addView(Ui.stat(this@MainActivity, secondLabel, secondValue, valueType = Ui.Type.TITLE),
+                LinearLayout.LayoutParams(0, -2, 1f))
         }
     }
 
-    private fun card(content: LinearLayout.() -> Unit): LinearLayout =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(18))
-            background = roundedBackground(Color.WHITE, dp(18).toFloat())
-            content()
-            layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-                topMargin = dp(8)
-                bottomMargin = dp(8)
-            }
-        }
+    private fun card(content: LinearLayout.() -> Unit): LinearLayout = Ui.card(this, content = content)
 
-    private fun actionButton(text: String, action: () -> Unit) = Button(this).apply {
-        this.text = text
-        isAllCaps = false
-        setTextColor(Color.WHITE)
-        background = roundedBackground(CORAL, dp(12).toFloat())
-        setOnTouchListener { view, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> view.animate().scaleX(.97f).scaleY(.97f).setDuration(90).start()
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                    view.animate().scaleX(1f).scaleY(1f).setDuration(130).start()
-            }
-            false
-        }
-        setOnClickListener { action() }
-    }
+    private fun actionButton(
+        text: String,
+        style: Ui.ButtonStyle = Ui.ButtonStyle.PRIMARY,
+        icon: Int? = null,
+        action: () -> Unit
+    ): View = Ui.button(this, text, style, icon, onClick = action)
 
     private fun updateNavigation() {
-        DashboardTab.entries.forEachIndexed { index, tab ->
-            val button = navigationBar.getChildAt(index) as? Button ?: return@forEachIndexed
-            val selected = tab == selectedTab
-            button.background = roundedBackground(
-                if (selected) selectedAccent else Color.parseColor("#F4F0EC"),
-                dp(14).toFloat()
+        navItems.forEach { item ->
+            val selected = item.tab == selectedTab
+            item.pill.background = if (selected) Ui.rounded(Ui.BRAND_SOFT, dp(16).toFloat()) else null
+            item.icon.imageTintList = android.content.res.ColorStateList.valueOf(
+                if (selected) Ui.BRAND_DEEP else Ui.INK_3
             )
-            button.setTextColor(if (selected) Color.WHITE else INK)
-            button.animate()
-                .scaleX(if (selected) 1.04f else 1f)
-                .scaleY(if (selected) 1.04f else 1f)
-                .setInterpolator(OvershootInterpolator())
-                .setDuration(150)
-                .start()
+            item.label.setTextColor(if (selected) Ui.INK else Ui.INK_3)
+            item.label.typeface = Ui.font(this, if (selected) 700 else 500)
+            if (selected) {
+                item.pill.scaleX = .85f
+                item.pill.animate().scaleX(1f).setInterpolator(OvershootInterpolator()).setDuration(220).start()
+            }
         }
     }
 
-    private fun sectionTitle(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 17f
-        setTextColor(INK)
-        setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(18), 0, dp(4))
-    }
+    private fun sectionTitle(text: String, caption: String? = null): View = Ui.sectionTitle(this, text, caption)
 
     private fun label(text: String, color: Int = MUTED, size: Float = 13f) = TextView(this).apply {
         this.text = text
         textSize = size
         setTextColor(color)
+        typeface = Ui.font(this@MainActivity, 500)
+        setLineSpacing(0f, 1.25f)
     }
 
     private fun metric(text: String, size: Float) = TextView(this).apply {
         this.text = text
         textSize = size
         setTextColor(INK)
-        setTypeface(typeface, Typeface.BOLD)
+        typeface = Ui.font(this@MainActivity, 800)
+        letterSpacing = -0.01f
+        fontFeatureSettings = "tnum"
         setPadding(0, dp(4), 0, dp(2))
     }
 
-    private fun divider() = View(this).apply {
-        setBackgroundColor(Color.parseColor("#EEE8E0"))
-        layoutParams = LinearLayout.LayoutParams(-1, dp(1))
-    }
+    private fun divider() = Ui.divider(this)
 
     private fun roundedBackground(color: Int, radius: Float) =
         GradientDrawable().apply {
@@ -2858,6 +2924,8 @@ class MainActivity : android.app.Activity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private fun dp(value: Float): Float = value * resources.displayMetrics.density
+
     /**
      * Color themes, layout tags, step indices, and refresh timing constants for main activity.
      */
@@ -2877,32 +2945,44 @@ class MainActivity : android.app.Activity() {
         /** Onboarding step index representing the initial settings & timer configuration screen. */
         const val ONBOARDING_SETTINGS_STEP = -1
 
+        /** Tags of the views the onboarding tour spotlights. */
+        const val TOUR_GOALS = "tour_goals"
+        const val TOUR_LIMITS = "tour_limits"
+        const val TOUR_TIME_CHART = "tour_time_chart"
+        const val TOUR_SCROLLS_TODAY = "tour_scrolls_today"
+        const val TOUR_SCROLLS_BY_APP = "tour_scrolls_by_app"
+        const val TOUR_APPS = "tour_apps"
+        const val TOUR_GOAL_SETTINGS = "tour_goal_settings"
+        const val TOUR_REMINDER = "tour_reminder"
+        const val TOUR_FOCUS = "tour_focus"
+        const val TOUR_SCORE = "tour_score"
+
         /** Layout tag identifying the tracking setup / consent screen. */
         const val TRACKING_SETUP_TAG = "tracking_setup"
 
         /** Primary cream background color. */
-        val CREAM = Color.parseColor("#FFF8EF")
+        val CREAM = Ui.BG
 
         /** Primary ink text color. */
-        val INK = Color.parseColor("#17202A")
+        val INK = Ui.INK
 
         /** Muted subtitle text color. */
-        val MUTED = Color.parseColor("#65727E")
+        val MUTED = Ui.INK_2
 
         /** Coral primary accent color. */
-        val CORAL = Color.parseColor("#F26B5E")
+        val CORAL = Ui.BRAND
 
         /** Dark coral header/badge accent color. */
-        val CORAL_DARK = Color.parseColor("#C94D43")
+        val CORAL_DARK = Ui.BRAND_DEEP
 
         /** Success green accent color. */
-        val GREEN = Color.parseColor("#287A57")
+        val GREEN = Ui.SUCCESS
 
         /** Time tab teal accent color. */
-        val TEAL = Color.parseColor("#2C9A91")
+        val TEAL = Ui.TEAL
 
         /** Scrolls tab purple accent color. */
-        val PURPLE = Color.parseColor("#8371C8")
+        val PURPLE = Ui.VIOLET
 
         /** Gold streak/award accent color. */
         val GOLD = Color.parseColor("#F5C451")

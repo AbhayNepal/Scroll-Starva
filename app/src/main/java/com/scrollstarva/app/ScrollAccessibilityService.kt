@@ -727,7 +727,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                     guide.hint(breakPicker, breakPickerTip(it))
                 }
                 guide.addStop(addPromptSelector(prompt, breakPicker), breakTip)
-                val breakButton = addPromptAction(prompt, "Take this scroll break", primary = true) {
+                val breakButton = addPromptAction(prompt, "Take this scroll break", Ui.ButtonStyle.PRIMARY) {
                     repository.setFocusBreakMinutes(selectedBreakMinutes)
                     if (repository.pauseFocusForScrollBreak(selectedBreakMinutes * 60_000L) != null) {
                         scheduleFocusReminder()
@@ -776,8 +776,9 @@ class ScrollAccessibilityService : AccessibilityService() {
             extraContent = { prompt, guide ->
                 prompt.addView(TextView(this).apply {
                     text = "Focus duration (up to 8 hours)"
-                    textSize = 14f
-                    setTextColor(Color.parseColor("#65727E"))
+                    textSize = 13f
+                    typeface = Ui.font(this@ScrollAccessibilityService, 600)
+                    setTextColor(Ui.INK_2)
                     setPadding(0, dp(4), 0, 0)
                 })
                 durationPicker.onDurationChanged = { millis ->
@@ -787,7 +788,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                     "Swipe the hours and minutes to pick a focus length. " +
                         "It’s set to ${durationLabel(durationPicker.durationMillis)}."
                 }
-                val focusButton = addPromptAction(prompt, "Start focus", primary = true) {
+                val focusButton = addPromptAction(prompt, "Start focus", Ui.ButtonStyle.PRIMARY) {
                     startFocusSession(durationPicker.durationMillis)
                 }
                 guide.addStop(focusButton) {
@@ -796,8 +797,9 @@ class ScrollAccessibilityService : AccessibilityService() {
                 }
                 val snoozeLabel = TextView(this).apply {
                     text = snoozeDescription(snoozeOptions[selectedSnoozeIndex])
-                    textSize = 14f
-                    setTextColor(Color.parseColor("#65727E"))
+                    textSize = 13f
+                    typeface = Ui.font(this@ScrollAccessibilityService, 600)
+                    setTextColor(Ui.INK_2)
                     setPadding(0, dp(4), 0, 0)
                 }
                 val snoozePicker = HorizontalWheelPicker(
@@ -820,7 +822,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                         "Currently ${snoozeWheelLabel(snoozeOptions[selectedSnoozeIndex])}."
                 }
                 prompt.addView(snoozeLabel)
-                val muteButton = addPromptAction(prompt, "Mute break reminders", primary = true) {
+                val muteButton = addPromptAction(prompt, "Mute break reminders", Ui.ButtonStyle.SECONDARY) {
                     repository.muteBreakReminders(snoozeOptions[selectedSnoozeIndex])
                     handler.removeCallbacks(repeatMarathonReminderRunnable)
                     marathonReminderShown = false
@@ -927,19 +929,10 @@ class ScrollAccessibilityService : AccessibilityService() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(18), dp(20), dp(12))
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#FFF8EF"))
-                cornerRadius = dp(22).toFloat()
-                setStroke(dp(1), Color.parseColor("#F1D8C5"))
-            }
-            elevation = dp(12).toFloat()
+            background = Ui.rounded(Ui.SURFACE, dp(24).toFloat(), dp(1), Ui.BORDER)
+            elevation = dp(16).toFloat()
         }
-        card.addView(TextView(this).apply {
-            text = title
-            textSize = 20f
-            setTextColor(Color.parseColor("#17202A"))
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-        })
+        card.addView(Ui.text(this, title, Ui.Type.TITLE))
         // Pip stays pinned above the scrolling options so it can guide through all of them.
         val guide = PipPromptGuide(this)
         card.addView(guide, LinearLayout.LayoutParams(-1, -2))
@@ -949,21 +942,11 @@ class ScrollAccessibilityService : AccessibilityService() {
             clipChildren = false
             clipToPadding = false
         }
-        content.addView(TextView(this).apply {
-            text = message
-            textSize = 15f
-            setTextColor(Color.parseColor("#65727E"))
-            setPadding(0, dp(4), 0, dp(6))
-        })
-        content.addView(TextView(this).apply {
-            text = "“$quote”"
-            textSize = 14f
-            setTextColor(Color.parseColor("#C94D43"))
-            setPadding(0, dp(2), 0, dp(12))
-        })
+        content.addView(Ui.text(this, message, Ui.Type.SMALL).apply { setPadding(0, dp(4), 0, dp(14)) })
+        content.addView(Ui.quote(this, quote), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
         extraContent?.invoke(content, guide)
         actions.forEachIndexed { index, action ->
-            val button = addPromptAction(content, action.label, primary = index == 0, action = action.onClick)
+            val button = addPromptAction(content, action.label, Ui.ButtonStyle.OUTLINE, action = action.onClick)
             guide.addStop(button) { action.tip }
         }
 
@@ -1035,39 +1018,13 @@ class ScrollAccessibilityService : AccessibilityService() {
     private fun addPromptAction(
         parent: LinearLayout,
         text: String,
-        primary: Boolean,
+        style: Ui.ButtonStyle,
         action: () -> Unit
     ): View {
-        val availableWidthDp =
-            (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt()
-        val buttonWidth = dp(minOf(250, availableWidthDp - 112).coerceAtLeast(180))
-        val button = Button(this).apply {
-            this.text = text
-            textSize = 14f
-            maxLines = 2
-            minWidth = 0
-            minimumWidth = 0
-            minHeight = dp(48)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            isAllCaps = false
-            setTextColor(if (primary) Color.WHITE else Color.parseColor("#17202A"))
-            background = GradientDrawable().apply {
-                setColor(
-                    if (primary) Color.parseColor("#F26B5E")
-                    else Color.parseColor("#F3E8DC")
-                )
-                cornerRadius = dp(12).toFloat()
-            }
-            setOnClickListener { action() }
-        }
-        val actionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            addView(button, LinearLayout.LayoutParams(buttonWidth, -2))
-        }
-        parent.addView(actionRow, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(4)
-            bottomMargin = dp(4)
+        val button = Ui.button(this, text, style, height = 48f, onClick = action)
+        parent.addView(button, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(5)
+            bottomMargin = dp(5)
         })
         return button
     }

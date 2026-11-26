@@ -66,18 +66,20 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
         badge.apply {
             textSize = 10f
             letterSpacing = 0.16f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#E4604F"))
+            typeface = Ui.font(context, 700)
+            setTextColor(Ui.BRAND_DEEP)
             text = "PIP"
         }
         text.apply {
             textSize = 15f
-            setTextColor(Color.parseColor("#34434D"))
+            setTextColor(Ui.INK)
+            typeface = Ui.font(context, 500)
             setLineSpacing(0f, 1.15f)
         }
         footer.apply {
             textSize = 12f
-            setTextColor(Color.parseColor("#9A8A7E"))
+            setTextColor(Ui.INK_3)
+            typeface = Ui.font(context, 500)
             setPadding(0, dp(6), 0, 0)
             text = "Tap me for a quick tour of your options\u00A0✨"
             visibility = GONE
@@ -86,7 +88,7 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
             orientation = VERTICAL
             setPadding(dp(14), dp(10), dp(14), dp(10))
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#FFF0C9"))
+                setColor(Ui.SURFACE_MUTED)
                 cornerRadius = dp(16).toFloat()
             }
             isClickable = true
