@@ -9,6 +9,9 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
 import android.view.animation.OvershootInterpolator
@@ -76,7 +79,7 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
             textSize = 12f
             setTextColor(Color.parseColor("#9A8A7E"))
             setPadding(0, dp(6), 0, 0)
-            text = "Tap me for a quick tour of your options ✨"
+            text = "Tap me for a quick tour of your options\u00A0✨"
             visibility = GONE
         }
         bubble.apply {
@@ -170,7 +173,10 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
             return
         }
 
-        footer.visibility = GONE
+        if (footer.visibility != GONE) {
+            footer.visibility = GONE
+            holdHeight()
+        }
         if (stops.isEmpty()) {
             pip.hop()
             showTip(narration, null, point = false)
@@ -218,6 +224,7 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
             text.animate().cancel()
             text.animate().alpha(0f).setDuration(90).withEndAction {
                 text.text = tip
+                holdHeight()
                 pip.talking = true
                 handler.postDelayed({ pip.talking = false }, (tip.length * 22L).coerceIn(400L, 1_400L))
                 text.animate().alpha(1f).setDuration(140).start()
@@ -227,6 +234,18 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
         }
         bubble.announceForAccessibility(tip)
         settleSoon(if (tourIndex >= 0) 6_000L else 3_200L)
+    }
+
+    /**
+     * Lets the bubble grow but not shrink between tips, so a shorter tip doesn't make the
+     * bottom-anchored card jump. Skipped while the one-off footer tip is showing.
+     */
+    private fun holdHeight() {
+        bubble.post {
+            if (footer.visibility == GONE && bubble.height > bubble.minimumHeight) {
+                bubble.minimumHeight = bubble.height
+            }
+        }
     }
 
     /** After a while, Pip stops pointing and looks back at the viewer. */
@@ -261,13 +280,22 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
     private fun typeIn(full: String, delayMs: Long) {
         cancelTyping()
         lastHintText = full
-        text.text = ""
+        text.text = SpannableString(full).apply {
+            setSpan(ForegroundColorSpan(Color.TRANSPARENT), 0, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
         pip.talking = true
         var index = 0
         typewriter = object : Runnable {
             override fun run() {
                 index = (index + 1).coerceAtMost(full.length)
-                text.text = full.substring(0, index)
+                // The whole line is laid out from the start (untyped part transparent) so the
+                // bubble doesn't grow line by line and nudge the card around.
+                text.text = SpannableString(full).apply {
+                    setSpan(
+                        ForegroundColorSpan(Color.TRANSPARENT),
+                        index, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
                 if (index < full.length) {
                     val ch = full[index - 1]
                     handler.postDelayed(this, if (ch == '.' || ch == '!' || ch == '?') 120L else delayMs)

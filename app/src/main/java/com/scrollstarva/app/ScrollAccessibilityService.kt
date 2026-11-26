@@ -738,7 +738,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         repository.marathonMinutes() * 60_000L
 
     private fun marathonReminderIntervalLabel(): String =
-        "${repository.marathonMinutes()} minutes"
+        minutesLabel(repository.marathonMinutes())
 
     private fun snoozeWheelLabel(durationMillis: Long): String =
         if (durationMillis < 60_000L) {
