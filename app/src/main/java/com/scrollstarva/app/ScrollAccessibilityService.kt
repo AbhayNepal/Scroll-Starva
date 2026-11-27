@@ -761,6 +761,7 @@ class ScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun showBreakPrompt(title: String, narration: String, message: String) {
+        Ui.applyTheme(this, repository.appearanceMode())  // before the pickers below are built
         val durationPicker = FocusDurationPicker(
             this,
             repository.defaultFocusMinutes() * 60_000L
@@ -926,6 +927,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         val cardsSeen = pipPrefs.getInt(KEY_PROMPT_CARDS_SEEN, 0)
         pipPrefs.edit().putInt(KEY_PROMPT_CARDS_SEEN, cardsSeen + 1).apply()
 
+        Ui.applyTheme(this, repository.appearanceMode())
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(18), dp(20), dp(12))

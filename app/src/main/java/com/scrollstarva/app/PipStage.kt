@@ -585,7 +585,7 @@ private class BubbleBackground(context: Context) : Drawable() {
     var tail = Tail.TOP
     var tailPos = 0f
     private val d = context.resources.displayMetrics.density
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.SURFACE }
     private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1.2f * d

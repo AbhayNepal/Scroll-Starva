@@ -28,44 +28,117 @@ object Ui {
 
     // ---------------------------------------------------------------- colour tokens
 
-    val BG = Color.parseColor("#F6F4F1")
-    val SURFACE = Color.WHITE
-    val SURFACE_MUTED = Color.parseColor("#F2EFEB")
-    val BORDER = Color.parseColor("#EAE5DF")
-    val BORDER_STRONG = Color.parseColor("#DDD6CE")
+    /** One full set of colour tokens. */
+    class Palette(
+        val bg: String, val surface: String, val surfaceMuted: String, val border: String, val borderStrong: String,
+        val ink: String, val ink2: String, val ink3: String,
+        val brand: String, val brandDeep: String, val brandSoft: String, val brandTint: String,
+        val success: String, val successSoft: String, val warning: String, val warningSoft: String,
+        val teal: String, val tealSoft: String, val violet: String, val violetSoft: String
+    )
 
-    val INK = Color.parseColor("#1B1A1F")
-    val INK_2 = Color.parseColor("#5E5A66")
-    val INK_3 = Color.parseColor("#9893A0")
+    private val LIGHT = Palette(
+        "#F6F4F1", "#FFFFFF", "#F2EFEB", "#EAE5DF", "#DDD6CE",
+        "#1B1A1F", "#5E5A66", "#9893A0",
+        "#EE6352", "#C4463A", "#FDEBE7", "#FFF6F3",
+        "#2E9466", "#E5F3EB", "#C9761F", "#FBEFDF",
+        "#1F978B", "#E2F3F0", "#7160D3", "#EEEBFA"
+    )
 
-    val BRAND = Color.parseColor("#EE6352")
-    val BRAND_DEEP = Color.parseColor("#C4463A")
-    val BRAND_SOFT = Color.parseColor("#FDEBE7")
-    val BRAND_TINT = Color.parseColor("#FFF6F3")
+    private val DARK = Palette(
+        "#121115", "#1C1B21", "#26252C", "#2D2B33", "#3C3943",
+        "#F2F0F4", "#B8B4BF", "#837E8B",
+        "#F0705F", "#FF9C8E", "#3A2522", "#291D1C",
+        "#4FC08D", "#1B3027", "#E9A453", "#352A1C",
+        "#3FC3B4", "#16302E", "#A193F2", "#28243F"
+    )
 
-    val SUCCESS = Color.parseColor("#2E9466")
-    val SUCCESS_SOFT = Color.parseColor("#E5F3EB")
-    val WARNING = Color.parseColor("#C9761F")
-    val WARNING_SOFT = Color.parseColor("#FBEFDF")
-    val TEAL = Color.parseColor("#1F978B")
-    val TEAL_SOFT = Color.parseColor("#E2F3F0")
-    val VIOLET = Color.parseColor("#7160D3")
-    val VIOLET_SOFT = Color.parseColor("#EEEBFA")
+    /** Appearance setting values (see [TrackingRepository.appearanceMode]). */
+    const val APPEARANCE_SYSTEM = 0
+    const val APPEARANCE_LIGHT = 1
+    const val APPEARANCE_DARK = 2
+
+    /** True while the dark palette is active. */
+    var isDark = false
+        private set
+    private var c = resolve(LIGHT)
+
+    /**
+     * Picks the palette for [mode]; [APPEARANCE_SYSTEM] follows the phone's dark theme setting.
+     * Call before building views (activity creation, the reminder overlay).
+     */
+    fun applyTheme(context: Context, mode: Int) {
+        val systemDark = (context.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        isDark = when (mode) {
+            APPEARANCE_DARK -> true
+            APPEARANCE_LIGHT -> false
+            else -> systemDark
+        }
+        c = resolve(if (isDark) DARK else LIGHT)
+    }
+
+    private class Resolved(p: Palette) {
+        val bg = Color.parseColor(p.bg); val surface = Color.parseColor(p.surface)
+        val surfaceMuted = Color.parseColor(p.surfaceMuted); val border = Color.parseColor(p.border)
+        val borderStrong = Color.parseColor(p.borderStrong)
+        val ink = Color.parseColor(p.ink); val ink2 = Color.parseColor(p.ink2); val ink3 = Color.parseColor(p.ink3)
+        val brand = Color.parseColor(p.brand); val brandDeep = Color.parseColor(p.brandDeep)
+        val brandSoft = Color.parseColor(p.brandSoft); val brandTint = Color.parseColor(p.brandTint)
+        val success = Color.parseColor(p.success); val successSoft = Color.parseColor(p.successSoft)
+        val warning = Color.parseColor(p.warning); val warningSoft = Color.parseColor(p.warningSoft)
+        val teal = Color.parseColor(p.teal); val tealSoft = Color.parseColor(p.tealSoft)
+        val violet = Color.parseColor(p.violet); val violetSoft = Color.parseColor(p.violetSoft)
+    }
+
+    private fun resolve(p: Palette) = Resolved(p)
+
+    val BG get() = c.bg
+    val SURFACE get() = c.surface
+    val SURFACE_MUTED get() = c.surfaceMuted
+    val BORDER get() = c.border
+    val BORDER_STRONG get() = c.borderStrong
+
+    val INK get() = c.ink
+    val INK_2 get() = c.ink2
+    val INK_3 get() = c.ink3
+
+    val BRAND get() = c.brand
+    val BRAND_DEEP get() = c.brandDeep
+    val BRAND_SOFT get() = c.brandSoft
+    val BRAND_TINT get() = c.brandTint
+
+    val SUCCESS get() = c.success
+    val SUCCESS_SOFT get() = c.successSoft
+    val WARNING get() = c.warning
+    val WARNING_SOFT get() = c.warningSoft
+    val TEAL get() = c.teal
+    val TEAL_SOFT get() = c.tealSoft
+    val VIOLET get() = c.violet
+    val VIOLET_SOFT get() = c.violetSoft
 
     // ---------------------------------------------------------------- type
 
-    enum class Type(val sizeSp: Float, val weight: Int, val color: Int, val tracking: Float = 0f) {
-        DISPLAY(36f, 800, INK, -0.02f),
-        HEADLINE(26f, 800, INK, -0.015f),
-        TITLE(19f, 700, INK, -0.01f),
-        SUBTITLE(16f, 700, INK),
-        BODY(15f, 400, INK_2),
-        BODY_STRONG(15f, 600, INK),
-        SMALL(13.5f, 400, INK_2),
-        CAPTION(12f, 500, INK_3),
-        LABEL(13f, 600, INK_2),
-        OVERLINE(11f, 700, INK_3, 0.12f),
-        STAT(24f, 800, INK, -0.01f)
+    enum class Type(val sizeSp: Float, val weight: Int, val tracking: Float = 0f) {
+        DISPLAY(36f, 800, -0.02f),
+        HEADLINE(26f, 800, -0.015f),
+        TITLE(19f, 700, -0.01f),
+        SUBTITLE(16f, 700),
+        BODY(15f, 400),
+        BODY_STRONG(15f, 600),
+        SMALL(13.5f, 400),
+        CAPTION(12f, 500),
+        LABEL(13f, 600),
+        OVERLINE(11f, 700, 0.12f),
+        STAT(24f, 800, -0.01f);
+
+        /** Default colour, read from the active palette. */
+        val color: Int
+            get() = when (this) {
+                BODY, SMALL, LABEL -> INK_2
+                CAPTION, OVERLINE -> INK_3
+                else -> INK
+            }
     }
 
     private val fontCache = HashMap<Int, Typeface>()
@@ -330,7 +403,8 @@ object Ui {
             ButtonStyle.GHOST -> Triple(Color.TRANSPARENT, BRAND_DEEP, 0)
         }
         val shape = rounded(bg, radius, stroke, BORDER_STRONG)
-        val ripple = if (style == ButtonStyle.PRIMARY) Color.argb(60, 255, 255, 255) else Color.argb(28, 196, 70, 58)
+        val ripple = if (style == ButtonStyle.PRIMARY) Color.argb(60, 255, 255, 255)
+            else Color.argb(if (isDark) 40 else 28, Color.red(BRAND), Color.green(BRAND), Color.blue(BRAND))
         background = RippleDrawable(ColorStateList.valueOf(ripple), shape, rounded(Color.WHITE, radius))
         if (icon != null) {
             addView(iconView(context, icon, fg, 18f), LinearLayout.LayoutParams(context.px(18f), context.px(18f)).apply {

@@ -530,6 +530,16 @@ class TrackingRepository(context: Context) {
             .apply()
     }
 
+    /** Light/dark preference: one of [Ui.APPEARANCE_SYSTEM], [Ui.APPEARANCE_LIGHT], [Ui.APPEARANCE_DARK]. */
+    fun appearanceMode(): Int =
+        preferences.getInt(KEY_APPEARANCE, Ui.APPEARANCE_SYSTEM)
+            .coerceIn(Ui.APPEARANCE_SYSTEM, Ui.APPEARANCE_DARK)
+
+    fun setAppearanceMode(mode: Int) {
+        require(mode in Ui.APPEARANCE_SYSTEM..Ui.APPEARANCE_DARK) { "Unknown appearance mode $mode" }
+        preferences.edit().putInt(KEY_APPEARANCE, mode).apply()
+    }
+
     /** Returns true if onboarding setup and tour have been completed. */
     fun isOnboardingComplete(): Boolean =
         preferences.getBoolean(KEY_ONBOARDING_COMPLETE, false)
@@ -788,6 +798,8 @@ class TrackingRepository(context: Context) {
         const val KEY_BEST_GOAL_STREAK = "best_goal_streak"
         /** Key storing date string of the last viewed morning recap. */
         const val KEY_LAST_MORNING_RECAP_DATE = "last_morning_recap_date"
+        /** Key storing the light/dark appearance preference. */
+        const val KEY_APPEARANCE = "appearance_mode"
         /** Key storing dates (yyyy-MM-dd) on which the tracking service was running. */
         const val KEY_MONITORED_DATES = "monitored_dates"
         /** Key storing the last date added to [KEY_MONITORED_DATES]. */

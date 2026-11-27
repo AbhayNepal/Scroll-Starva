@@ -88,12 +88,12 @@ private class SpotlightTourOverlay(
         xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
     }
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#F26B5E")
+        color = Ui.BRAND
         style = Paint.Style.STROKE
         strokeWidth = 2.5f * density
     }
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#66F26B5E")
+        color = Color.argb(102, Color.red(Ui.BRAND), Color.green(Ui.BRAND), Color.blue(Ui.BRAND))
         style = Paint.Style.STROKE
         strokeWidth = 7f * density
     }
@@ -319,7 +319,14 @@ class MainActivity : android.app.Activity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // The palette must be chosen before any view (or the window theme) is created.
+        val appearance = TrackingRepository(this).appearanceMode()
+        Ui.applyTheme(this, appearance)
+        setTheme(if (Ui.isDark) R.style.Theme_ScrollStarva_Dark else R.style.Theme_ScrollStarva)
         super.onCreate(savedInstanceState)
+        applySystemBarColors()
+        restoreTabAfterThemeChange?.let { selectedTab = it }
+        restoreTabAfterThemeChange = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
@@ -332,6 +339,16 @@ class MainActivity : android.app.Activity() {
         onboardingMarathonMinutes = repository.marathonMinutes()
         onboardingSelectedPackages = repository.selectedPackages().toMutableSet()
         renderAppState()
+    }
+
+    /** Status and navigation bars follow the active palette. */
+    private fun applySystemBarColors() {
+        window.setBackgroundDrawable(ColorDrawable(Ui.BG))
+        window.statusBarColor = Ui.BG
+        window.navigationBarColor = Ui.SURFACE
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = if (Ui.isDark) 0 else
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
     }
 
     override fun onResume() {
@@ -893,7 +910,7 @@ class MainActivity : android.app.Activity() {
                 check.background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     if (selected) setColor(CORAL) else {
-                        setColor(Color.WHITE)
+                        setColor(Ui.SURFACE)
                         setStroke(dp(2), Ui.BORDER_STRONG)
                     }
                 }
@@ -1906,6 +1923,8 @@ class MainActivity : android.app.Activity() {
                 showFocusScreen(checkNotNull(repository.activeFocusSession()))
             }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
         })
+        pageContent.addView(sectionTitle("Appearance"))
+        pageContent.addView(appearanceCard())
         pageContent.addView(sectionTitle("Mindful score"))
         pageContent.addView(card {
             tag = TOUR_SCORE
@@ -1960,6 +1979,40 @@ class MainActivity : android.app.Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(24), 0, dp(4))
         })
+    }
+
+    /** System / Light / Dark switch; applying it rebuilds the screen in the new palette. */
+    private fun appearanceCard(): View = card {
+        addView(Ui.cardHeader(
+            this@MainActivity, R.drawable.ic_visibility, Ui.VIOLET, Ui.VIOLET_SOFT,
+            "Theme", "Light, dark, or match your phone"
+        ))
+        val current = repository.appearanceMode()
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = Ui.rounded(Ui.SURFACE_MUTED, dp(14).toFloat())
+            listOf(
+                Ui.APPEARANCE_SYSTEM to "System",
+                Ui.APPEARANCE_LIGHT to "Light",
+                Ui.APPEARANCE_DARK to "Dark"
+            ).forEachIndexed { i, (mode, name) ->
+                val selected = mode == current
+                addView(Ui.text(this@MainActivity, name, Ui.Type.LABEL, if (selected) Ui.INK else Ui.INK_2).apply {
+                    gravity = Gravity.CENTER
+                    typeface = Ui.font(this@MainActivity, if (selected) 700 else 500)
+                    background = if (selected) Ui.rounded(Ui.SURFACE, dp(11).toFloat(), dp(1), Ui.BORDER) else null
+                    isClickable = true
+                    contentDescription = "$name theme${if (selected) ", selected" else ""}"
+                    setOnClickListener {
+                        if (mode == repository.appearanceMode()) return@setOnClickListener
+                        repository.setAppearanceMode(mode)
+                        restoreTabAfterThemeChange = selectedTab
+                        recreate()
+                    }
+                }, LinearLayout.LayoutParams(0, dp(40), 1f).apply { if (i > 0) marginStart = dp(4) })
+            }
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
     }
 
     private fun selectedAppsSettingsCard(): View = card {
@@ -2525,7 +2578,7 @@ class MainActivity : android.app.Activity() {
                 chartPaint.color = Ui.INK
                 canvas.drawRoundRect(RectF(cx - pillW / 2, pillBottom - pillH, cx + pillW / 2, pillBottom),
                     pillH / 2, pillH / 2, chartPaint)
-                textPaint.color = Color.WHITE
+                textPaint.color = Ui.SURFACE
                 canvas.drawText(label, cx, pillBottom - pillH / 2 + dp(4), textPaint)
             }
         }
@@ -2571,199 +2624,7 @@ class MainActivity : android.app.Activity() {
         return quotes[java.time.LocalDate.now().dayOfYear % quotes.size]
     }
 
-    private inner class GoalFlameView(
-        context: android.content.Context,
-        private val burning: Boolean
-    ) : View(context) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private var animationAttached = false
-        private var animationStartedAt = 0L
 
-        init {
-            contentDescription = if (burning) {
-                "A live animated flame showing both daily goals are on track."
-            } else {
-                "Live smoke animation above an extinguished flame because a daily goal was crossed."
-            }
-        }
-
-        override fun onAttachedToWindow() {
-            super.onAttachedToWindow()
-            animationAttached = true
-            animationStartedAt = android.os.SystemClock.uptimeMillis()
-            invalidate()
-        }
-
-        override fun onDetachedFromWindow() {
-            animationAttached = false
-            super.onDetachedFromWindow()
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val scale = minOf(width / 120f, height / 140f)
-            canvas.save()
-            canvas.translate(width / 2f, height / 2f + dp(6))
-            canvas.scale(scale, scale)
-            paint.style = Paint.Style.FILL
-            val elapsedMillis = android.os.SystemClock.uptimeMillis() - animationStartedAt
-
-            if (burning) {
-                val firePhase = (elapsedMillis % FIRE_ANIMATION_MILLIS).toFloat() /
-                    FIRE_ANIMATION_MILLIS
-                val wave = kotlin.math.sin(firePhase * Math.PI * 2).toFloat()
-                val flicker = (wave + 1f) / 2f
-                val sway = wave * 9f
-                paint.color = Color.argb(
-                    (35f + flicker * 35f).toInt(),
-                    242,
-                    107,
-                    53
-                )
-                canvas.drawOval(RectF(-38f, -31f - flicker * 5f, 38f, 57f), paint)
-                paint.color = Color.parseColor("#F26B35")
-                paint.shader = android.graphics.LinearGradient(
-                    0f,
-                    -42f,
-                    0f,
-                    52f,
-                    intArrayOf(
-                        Color.parseColor("#FFF7B0"),
-                        Color.parseColor("#FFB52E"),
-                        Color.parseColor("#F26B35"),
-                        Color.parseColor("#C93C24")
-                    ),
-                    null,
-                    android.graphics.Shader.TileMode.CLAMP
-                )
-                canvas.drawPath(flamePath(firePhase, 1f, -38f, 51f), paint)
-                paint.shader = null
-                paint.shader = android.graphics.LinearGradient(
-                    0f,
-                    -10f,
-                    0f,
-                    51f,
-                    intArrayOf(
-                        Color.parseColor("#FFFDE0"),
-                        Color.parseColor("#FFE36A"),
-                        Color.parseColor("#FF9A24")
-                    ),
-                    null,
-                    android.graphics.Shader.TileMode.CLAMP
-                )
-                canvas.drawPath(flamePath(firePhase + .24f, .53f, -13f, 51f), paint)
-                paint.shader = null
-                paint.color = Color.parseColor("#FFFBE0")
-                val coreWidth = 7f + flicker * 3f
-                canvas.drawOval(
-                    RectF(-coreWidth + sway * .2f, 27f - flicker * 3f,
-                        coreWidth + sway * .2f, 49f),
-                    paint
-                )
-                paint.color = GOLD
-                for (index in 0..2) {
-                    val emberPhase = (firePhase + index / 3f) % 1f
-                    val emberY = 27f - emberPhase * 58f
-                    val emberX = kotlin.math.sin((emberPhase + index) * Math.PI * 2).toFloat() * 22f
-                    paint.alpha = ((1f - emberPhase) * 210f).toInt().coerceIn(0, 210)
-                    canvas.drawCircle(emberX, emberY, 1.5f + (1f - emberPhase), paint)
-                }
-                paint.alpha = 255
-            } else {
-                val smokePhase = (elapsedMillis % SMOKE_ANIMATION_MILLIS).toFloat() /
-                    SMOKE_ANIMATION_MILLIS
-                drawSmokeColumn(canvas, smokePhase, -9f, .0f)
-                drawSmokeColumn(canvas, (smokePhase + .5f) % 1f, 9f, .35f)
-            }
-            paint.color = Color.parseColor("#8C5D47")
-            canvas.drawRoundRect(RectF(-30f, 51f, 30f, 59f), 4f, 4f, paint)
-            canvas.restore()
-            if (animationAttached) postInvalidateOnAnimation()
-        }
-
-        private fun drawSmokeColumn(
-            canvas: Canvas,
-            phase: Float,
-            initialDrift: Float,
-            phaseOffset: Float
-        ) {
-            val path = Path()
-            val steps = 44
-            for (index in 0..steps) {
-                val progress = index / steps.toFloat()
-                val y = 45f - progress * 92f
-                val amplitude = 4f + progress * 9f
-                val wave = kotlin.math.sin(
-                    (progress * 2.6f - phase + phaseOffset) * Math.PI * 2
-                ).toFloat()
-                val secondaryWave = kotlin.math.sin(
-                    (progress * 5.1f + phase * .7f + phaseOffset) * Math.PI * 2
-                ).toFloat()
-                val x = initialDrift + wave * amplitude + secondaryWave * 2.5f * progress
-                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-
-            paint.style = Paint.Style.STROKE
-            paint.strokeCap = Paint.Cap.ROUND
-            paint.strokeJoin = Paint.Join.ROUND
-            paint.strokeWidth = 19f
-            paint.shader = android.graphics.LinearGradient(
-                0f,
-                45f,
-                0f,
-                -47f,
-                intArrayOf(
-                    Color.argb(0, 125, 135, 145),
-                    Color.argb(95, 125, 135, 145),
-                    Color.argb(55, 145, 152, 160),
-                    Color.argb(0, 145, 152, 160)
-                ),
-                null,
-                android.graphics.Shader.TileMode.CLAMP
-            )
-            canvas.drawPath(path, paint)
-            paint.shader = null
-            paint.style = Paint.Style.FILL
-        }
-
-        private fun flamePath(
-            phase: Float,
-            widthScale: Float,
-            tipY: Float,
-            baseY: Float
-        ): Path {
-            val path = Path()
-            val steps = 28
-            val height = baseY - tipY
-            path.moveTo(-3f * widthScale, baseY)
-            for (index in 0..steps) {
-                val t = 1f - index / steps.toFloat()
-                val y = tipY + height * t
-                val envelope = kotlin.math.sin(t * Math.PI).toFloat()
-                val halfWidth = (5f + 26f * envelope.pow(.72f)) * widthScale
-                val edgeWave = kotlin.math.sin(phase * Math.PI * 2 + t * Math.PI * 5).toFloat()
-                val centerDrift = kotlin.math.sin(phase * Math.PI * 2 + t * Math.PI * 1.7).toFloat() *
-                    5f * envelope
-                val leftEdge = centerDrift - halfWidth + edgeWave * 3.5f * envelope * widthScale
-                path.lineTo(leftEdge, y)
-            }
-            for (index in 0..steps) {
-                val t = index / steps.toFloat()
-                val y = tipY + height * t
-                val envelope = kotlin.math.sin(t * Math.PI).toFloat()
-                val halfWidth = (5f + 26f * envelope.pow(.72f)) * widthScale
-                val edgeWave = kotlin.math.sin(phase * Math.PI * 2 + t * Math.PI * 5 + 1.1).toFloat()
-                val centerDrift = kotlin.math.sin(phase * Math.PI * 2 + t * Math.PI * 1.7).toFloat() *
-                    5f * envelope
-                val rightEdge = centerDrift + halfWidth + edgeWave * 3.5f * envelope * widthScale
-                path.lineTo(rightEdge, y)
-            }
-            path.lineTo(3f * widthScale, baseY)
-            path.close()
-            return path
-        }
-
-    }
 
     private fun animatePageIn() {
         pageContent.alpha = 0f
@@ -2936,11 +2797,7 @@ class MainActivity : android.app.Activity() {
         /** Interval in milliseconds for updating active focus timer countdown. */
         const val FOCUS_TIMER_REFRESH_MILLIS = 200L
 
-        /** Duration in milliseconds for flame animation cycles. */
-        const val FIRE_ANIMATION_MILLIS = 850L
 
-        /** Duration in milliseconds for smoke animation cycles. */
-        const val SMOKE_ANIMATION_MILLIS = 2_100L
 
         /** Onboarding step index representing the initial settings & timer configuration screen. */
         const val ONBOARDING_SETTINGS_STEP = -1
@@ -2960,31 +2817,18 @@ class MainActivity : android.app.Activity() {
         /** Layout tag identifying the tracking setup / consent screen. */
         const val TRACKING_SETUP_TAG = "tracking_setup"
 
-        /** Primary cream background color. */
-        val CREAM = Ui.BG
+        /** Tab to reopen after the activity is recreated for an appearance change. */
+        var restoreTabAfterThemeChange: DashboardTab? = null
 
-        /** Primary ink text color. */
-        val INK = Ui.INK
+        // Shorthands for design-system colours (read live, so they follow light/dark mode).
+        val CREAM get() = Ui.BG
+        val INK get() = Ui.INK
+        val MUTED get() = Ui.INK_2
+        val CORAL get() = Ui.BRAND
+        val CORAL_DARK get() = Ui.BRAND_DEEP
+        val GREEN get() = Ui.SUCCESS
+        val TEAL get() = Ui.TEAL
+        val PURPLE get() = Ui.VIOLET
 
-        /** Muted subtitle text color. */
-        val MUTED = Ui.INK_2
-
-        /** Coral primary accent color. */
-        val CORAL = Ui.BRAND
-
-        /** Dark coral header/badge accent color. */
-        val CORAL_DARK = Ui.BRAND_DEEP
-
-        /** Success green accent color. */
-        val GREEN = Ui.SUCCESS
-
-        /** Time tab teal accent color. */
-        val TEAL = Ui.TEAL
-
-        /** Scrolls tab purple accent color. */
-        val PURPLE = Ui.VIOLET
-
-        /** Gold streak/award accent color. */
-        val GOLD = Color.parseColor("#F5C451")
     }
 }

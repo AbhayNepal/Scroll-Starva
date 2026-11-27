@@ -12,4 +12,18 @@
         <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+
+    <!-- Dark variant, chosen in code from the Appearance setting (or the phone's dark theme). -->
+    <style name="Theme.ScrollStarva.Dark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">@font/plus_jakarta</item>
+        <item name="android:colorAccent">#F0705F</item>
+        <item name="android:colorControlActivated">#F0705F</item>
+        <item name="android:textColorPrimary">#F2F0F4</item>
+        <item name="android:textColorSecondary">#B8B4BF</item>
+        <item name="android:windowBackground">#121115</item>
+        <item name="android:colorBackground">#1C1B21</item>
+        <item name="android:navigationBarColor">#1C1B21</item>
+        <item name="android:statusBarColor">#121115</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
 </resources>
