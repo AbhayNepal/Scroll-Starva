@@ -50,7 +50,11 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
 
     private val animationsOn: Boolean get() = ValueAnimator.areAnimatorsEnabled()
 
-    private class Stop(val target: View, val text: () -> String)
+    /** A tour stop: the control, what to call it in the bubble, and what Pip says about it. */
+    private class Stop(val target: View, val name: String, val text: () -> String)
+
+    private val stepLine = TextView(context)
+    private var highlighted: View? = null
 
     init {
         orientation = HORIZONTAL
@@ -76,6 +80,13 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
             typeface = Ui.font(context, 500)
             setLineSpacing(0f, 1.15f)
         }
+        stepLine.apply {
+            textSize = 12f
+            setTextColor(Ui.INK_3)
+            typeface = Ui.font(context, 600)
+            setPadding(0, dp(8), 0, 0)
+            visibility = GONE
+        }
         footer.apply {
             textSize = 12f
             setTextColor(Ui.INK_3)
@@ -97,6 +108,7 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
             addView(text, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dp(2)
             })
+            addView(stepLine)
             addView(footer)
         }
         addView(bubble, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8) })
@@ -105,8 +117,8 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
     // ================================================================ setup
 
     /** Registers an option for the tap-through tour. [text] is read when the stop is shown. */
-    fun addStop(target: View, text: () -> String) {
-        stops += Stop(target, text)
+    fun addStop(target: View, name: String, text: () -> String) {
+        stops += Stop(target, name, text)
     }
 
     /** Shows the "tap me" footer (used for the first few cards ever, then dropped). */
@@ -148,8 +160,7 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
         pendingHint?.let { handler.removeCallbacks(it) }
         pendingHint = Runnable {
             pendingHint = null
-            tourIndex = -1
-            badge.text = "PIP"
+            endTour()
             showTip(tip, target, point = false)
         }.also { handler.postDelayed(it, delayMs) }
     }
@@ -167,8 +178,7 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
         while (tapTimes.isNotEmpty() && now - tapTimes.first() > 2_000L) tapTimes.removeFirst()
         if (tapTimes.size >= 7) {
             tapTimes.clear()
-            tourIndex = -1
-            badge.text = "PIP"
+            endTour()
             pip.stopPointing()
             pip.dizzy(1.6f)
             showTip("Whoa, spinning! 😵 One tap at a time and I'll show you around.", null, point = false)
@@ -186,19 +196,64 @@ class PipPromptGuide(context: Context) : LinearLayout(context) {
         }
         tourIndex++
         if (tourIndex >= stops.size) {
-            tourIndex = -1
-            badge.text = "PIP"
+            endTour()
             pip.stopPointing()
             pip.hop()
             showTip("That's everything! No wrong answers — pick whatever feels right. 💛", null, point = false)
             return
         }
         val stop = stops[tourIndex]
-        badge.text = "OPTION ${tourIndex + 1} OF ${stops.size} · TAP FOR NEXT"
+        // Name the control instead of numbering "options", and ring it on the card.
+        badge.text = stop.name.uppercase()
+        stepLine.text = if (tourIndex == stops.lastIndex) {
+            "Tip ${tourIndex + 1} of ${stops.size} · tap me to finish"
+        } else {
+            "Tip ${tourIndex + 1} of ${stops.size} · tap me for the next"
+        }
+        stepLine.visibility = VISIBLE
         stop.target.requestRectangleOnScreen(Rect(0, 0, stop.target.width, stop.target.height), false)
         if (tourIndex == 0) pip.hop()
         showTip(stop.text(), stop.target, point = true)
+        highlight(stop.target)
         nudge(stop.target)
+    }
+
+    private fun endTour() {
+        tourIndex = -1
+        badge.text = "PIP"
+        stepLine.visibility = GONE
+        highlight(null)
+    }
+
+    /** Draws a coral ring around [target] (or clears it), so it's clear which control Pip means. */
+    private fun highlight(target: View?) {
+        if (highlighted === target) return
+        highlighted?.foreground = null
+        highlighted = target
+        if (target == null) return
+        // Coral outline plus a thin card-coloured line just inside it, so the ring also shows
+        // on the coral-filled main button.
+        val outerWidth = dp(2) + dp(1) / 2
+        val ring = android.graphics.drawable.LayerDrawable(arrayOf(
+            GradientDrawable().apply {
+                setColor(Color.TRANSPARENT)
+                setStroke(outerWidth, Ui.BRAND)
+                cornerRadius = dp(15).toFloat()
+            },
+            GradientDrawable().apply {
+                setColor(Color.TRANSPARENT)
+                setStroke(dp(2), Ui.SURFACE)
+                cornerRadius = dp(13).toFloat()
+            }
+        )).apply { setLayerInset(1, outerWidth, outerWidth, outerWidth, outerWidth) }
+        target.foreground = ring
+        if (animationsOn) {
+            ValueAnimator.ofInt(0, 255).apply {
+                duration = 220
+                addUpdateListener { ring.alpha = it.animatedValue as Int }
+                start()
+            }
+        }
     }
 
     // ================================================================ internals

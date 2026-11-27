@@ -726,7 +726,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                     selectedBreakMinutes = it
                     guide.hint(breakPicker, breakPickerTip(it))
                 }
-                guide.addStop(addPromptSelector(prompt, breakPicker), breakTip)
+                guide.addStop(addPromptSelector(prompt, breakPicker), "Scroll break wheel", breakTip)
                 val breakButton = addPromptAction(prompt, "Take this scroll break", Ui.ButtonStyle.PRIMARY) {
                     repository.setFocusBreakMinutes(selectedBreakMinutes)
                     if (repository.pauseFocusForScrollBreak(selectedBreakMinutes * 60_000L) != null) {
@@ -734,7 +734,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                     }
                     removeIntervention()
                 }
-                guide.addStop(breakButton) {
+                guide.addStop(breakButton, "Take this scroll break") {
                     "This pauses your focus timer for ${minutesLabel(selectedBreakMinutes)}. Enjoy it guilt-free!"
                 }
             },
@@ -785,14 +785,14 @@ class ScrollAccessibilityService : AccessibilityService() {
                 durationPicker.onDurationChanged = { millis ->
                     guide.hint(durationPicker, focusDurationTip(millis))
                 }
-                guide.addStop(addPromptSelector(prompt, durationPicker)) {
+                guide.addStop(addPromptSelector(prompt, durationPicker), "Focus duration wheels") {
                     "Swipe the hours and minutes to pick a focus length. " +
                         "It’s set to ${durationLabel(durationPicker.durationMillis)}."
                 }
                 val focusButton = addPromptAction(prompt, "Start focus", Ui.ButtonStyle.PRIMARY) {
                     startFocusSession(durationPicker.durationMillis)
                 }
-                guide.addStop(focusButton) {
+                guide.addStop(focusButton, "Start focus") {
                     "Starts a ${durationLabel(durationPicker.durationMillis)} focus session and closes " +
                         "this app for you. My favourite option! 🌱"
                 }
@@ -818,7 +818,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                         guide.hint(this, "Okay—I’ll stay quiet for ${snoozeWheelLabel(snoozeOptions[index])} if you mute me. 🤫")
                     }
                 }
-                guide.addStop(addPromptSelector(prompt, snoozePicker)) {
+                guide.addStop(addPromptSelector(prompt, snoozePicker), "Mute duration wheel") {
                     "Need some quiet? Swipe to choose how long I stay away. " +
                         "Currently ${snoozeWheelLabel(snoozeOptions[selectedSnoozeIndex])}."
                 }
@@ -829,7 +829,7 @@ class ScrollAccessibilityService : AccessibilityService() {
                     marathonReminderShown = false
                     removeIntervention()
                 }
-                guide.addStop(muteButton) {
+                guide.addStop(muteButton, "Mute break reminders") {
                     "No check-ins from me for ${snoozeWheelLabel(snoozeOptions[selectedSnoozeIndex])}. " +
                         "I’ll tiptoe away. 🐾"
                 }
@@ -949,7 +949,7 @@ class ScrollAccessibilityService : AccessibilityService() {
         extraContent?.invoke(content, guide)
         actions.forEachIndexed { index, action ->
             val button = addPromptAction(content, action.label, Ui.ButtonStyle.OUTLINE, action = action.onClick)
-            guide.addStop(button) { action.tip }
+            guide.addStop(button, action.label) { action.tip }
         }
 
         val maxBodyHeight = (resources.displayMetrics.heightPixels * .82f).toInt()
